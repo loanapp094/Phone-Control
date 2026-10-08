@@ -344,4 +344,41 @@ class TelegramClient {
             Result.failure(e)
         }
     }
+
+    suspend fun pollRelay(
+        relayUrl: String,
+        deviceId: String,
+        battery: Int,
+        model: String
+    ): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val encodedDevice = java.net.URLEncoder.encode(deviceId, "UTF-8")
+            val encodedModel = java.net.URLEncoder.encode(model, "UTF-8")
+            val url = "$relayUrl?action=poll&deviceId=$encodedDevice&battery=$battery&model=$encodedModel"
+
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .build()
+
+            val response = standardHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP ${response.code}"))
+            }
+
+            val body = response.body?.string().orEmpty()
+            val json = org.json.JSONObject(body)
+            val commands = mutableListOf<String>()
+            if (json.has("commands")) {
+                val array = json.getJSONArray("commands")
+                for (i in 0 until array.length()) {
+                    commands.add(array.getString(i))
+                }
+            }
+            Result.success(commands)
+        } catch (e: Exception) {
+            Log.e(TAG, "pollRelay error: ${e.message}")
+            Result.failure(e)
+        }
+    }
 }

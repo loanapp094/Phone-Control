@@ -73,6 +73,29 @@ class CommandHandler(
         val commandParts = text.split("\\s+".toRegex())
         val rawCommand = commandParts[0].lowercase().removeSuffix("@${preferenceManager.botConfigFlow.value.botUsername.lowercase()}")
 
+        // Multi-device targeted command handling: /cmd <deviceId> <command>
+        var effectiveRaw = rawCommand
+        var effectiveParts = commandParts
+        if (rawCommand == "/cmd") {
+            val targetId = commandParts.getOrNull(1)?.lowercase() ?: ""
+            val myId = preferenceManager.getDeviceId().lowercase()
+            if (targetId.isNotEmpty() && targetId != "all" && targetId != myId) {
+                // Command is targeted at a different phone, ignore silently
+                return@withContext
+            }
+            val subCmd = commandParts.getOrNull(2)?.lowercase() ?: ""
+            if (subCmd.isEmpty()) {
+                telegramClient.sendMessage(
+                    token = token,
+                    chatId = chatId,
+                    text = "⚠️ <b>Usage:</b> <code>/cmd $myId &lt;command&gt;</code>\n\nExample: <code>/cmd $myId status</code>"
+                )
+                return@withContext
+            }
+            effectiveRaw = if (subCmd.startsWith("/")) subCmd else "/$subCmd"
+            effectiveParts = listOf(effectiveRaw) + commandParts.drop(3)
+        }
+
         LogRepository.addLog(
             type = LogType.COMMAND,
             title = "Command Received",
@@ -80,13 +103,16 @@ class CommandHandler(
         )
 
         when {
-            rawCommand == "/start" -> {
+            effectiveRaw == "/devices" -> {
+                handleDevicesCommand(chatId, token, isServiceRunning)
+            }
+            effectiveRaw == "/start" -> {
                 handleStartCommand(chatId, token, isServiceRunning, serviceStartTimeMs)
             }
-            rawCommand == "/help" -> {
+            effectiveRaw == "/help" -> {
                 handleHelpCommand(chatId, token)
             }
-            rawCommand == "/status" -> {
+            effectiveRaw == "/status" -> {
                 handleStatusCommand(chatId, token, isServiceRunning, serviceStartTimeMs)
             }
             rawCommand == "/health" -> {
@@ -299,6 +325,28 @@ class CommandHandler(
                 }
             }
         }
+    }
+
+    private suspend fun handleDevicesCommand(
+        chatId: Long,
+        token: String,
+        isServiceRunning: Boolean
+    ) {
+        val deviceId = preferenceManager.getDeviceId()
+        val status = deviceInfoProvider.getDeviceStatus(isServiceRunning)
+        val text = """
+            📱 <b>Device Info:</b>
+            • <b>ID:</b> <code>$deviceId</code>
+            • <b>Model:</b> ${status.deviceName}
+            • <b>Status:</b> ${if (isServiceRunning) "🟢 Online" else "🔴 Service Offline"}
+            • <b>Battery:</b> ${status.batteryPercent}% ${if (status.isCharging) "⚡ Charging" else ""}
+            • <b>Android:</b> ${status.androidVersion}
+
+            <i>To send commands to this device:</i>
+            <code>/cmd $deviceId &lt;command&gt;</code>
+            <i>Example:</i> <code>/cmd $deviceId status</code>
+        """.trimIndent()
+        telegramClient.sendMessage(token, chatId, text)
     }
 
     private suspend fun handleStartCommand(

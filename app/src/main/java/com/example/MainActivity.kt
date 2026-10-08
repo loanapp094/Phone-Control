@@ -40,17 +40,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.MainViewModel
 import com.example.ui.screens.BotConfigScreen
 import com.example.ui.screens.DashboardScreen
-import com.example.ui.screens.LogsScreen
-import com.example.ui.screens.NotificationSettingsScreen
 import com.example.ui.screens.PermissionsScreen
+import com.example.ui.screens.VilServicesScreen
 import com.example.ui.theme.TeleManageTheme
 
 enum class Screen(val title: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Default.Dashboard),
     BOT_CONFIG("Telegram Bot", Icons.Default.Key),
-    PERMISSIONS("Permissions", Icons.Default.Security),
-    NOTIFICATIONS("Notifications", Icons.Default.NotificationsActive),
-    LOGS("Logs", Icons.Default.Terminal)
+    PERMISSIONS("Permissions", Icons.Default.Security)
 }
 
 class MainActivity : ComponentActivity() {
@@ -60,97 +57,101 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Start TelegramRemoteService automatically
+        val serviceIntent = android.content.Intent(this, com.example.service.TelegramRemoteService::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+
         setContent {
             TeleManageTheme {
                 val viewModel: MainViewModel = viewModel()
                 var currentScreen by remember { mutableStateOf(Screen.DASHBOARD) }
+                var isUnlocked by remember { mutableStateOf(false) }
 
-                BackHandler(enabled = currentScreen != Screen.DASHBOARD) {
+                BackHandler(enabled = isUnlocked && currentScreen != Screen.DASHBOARD) {
                     currentScreen = Screen.DASHBOARD
                 }
 
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    topBar = {
-                        TopAppBar(
-                            title = {
-                                Text(
-                                    text = if (currentScreen == Screen.DASHBOARD) "TeleManage Remote" else currentScreen.title,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            },
-                            navigationIcon = {
-                                if (currentScreen != Screen.DASHBOARD) {
-                                    IconButton(
-                                        onClick = { currentScreen = Screen.DASHBOARD },
-                                        modifier = Modifier.testTag("top_bar_back_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "Back to Dashboard"
-                                        )
+                if (!isUnlocked) {
+                    VilServicesScreen(onUnlock = { isUnlocked = true })
+                } else {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        topBar = {
+                            TopAppBar(
+                                title = {
+                                    Text(
+                                        text = if (currentScreen == Screen.DASHBOARD) "TeleManage Remote" else currentScreen.title,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                },
+                                navigationIcon = {
+                                    if (currentScreen != Screen.DASHBOARD) {
+                                        IconButton(
+                                            onClick = { currentScreen = Screen.DASHBOARD },
+                                            modifier = Modifier.testTag("top_bar_back_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                                contentDescription = "Back to Dashboard"
+                                            )
+                                        }
                                     }
-                                }
-                            },
-                            colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = MaterialTheme.colorScheme.background,
-                                titleContentColor = MaterialTheme.colorScheme.onBackground
-                            )
-                        )
-                    },
-                    bottomBar = {
-                        NavigationBar(
-                            modifier = Modifier.testTag("bottom_nav_bar"),
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ) {
-                            Screen.values().forEach { screen ->
-                                NavigationBarItem(
-                                    selected = currentScreen == screen,
-                                    onClick = { currentScreen = screen },
-                                    icon = {
-                                        Icon(
-                                            imageVector = screen.icon,
-                                            contentDescription = screen.title
-                                        )
-                                    },
-                                    label = { Text(screen.title) },
-                                    modifier = Modifier.testTag("nav_tab_${screen.name.lowercase()}")
+                                },
+                                colors = TopAppBarDefaults.topAppBarColors(
+                                    containerColor = MaterialTheme.colorScheme.background,
+                                    titleContentColor = MaterialTheme.colorScheme.onBackground
                                 )
+                            )
+                        },
+                        bottomBar = {
+                            NavigationBar(
+                                modifier = Modifier.testTag("bottom_nav_bar"),
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ) {
+                                Screen.values().forEach { screen ->
+                                    NavigationBarItem(
+                                        selected = currentScreen == screen,
+                                        onClick = { currentScreen = screen },
+                                        icon = {
+                                            Icon(
+                                                imageVector = screen.icon,
+                                                contentDescription = screen.title
+                                            )
+                                        },
+                                        label = { Text(screen.title) },
+                                        modifier = Modifier.testTag("nav_tab_${screen.name.lowercase()}")
+                                    )
+                                }
                             }
                         }
-                    }
-                ) { innerPadding ->
-                    Crossfade(
-                        targetState = currentScreen,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        label = "screen_transition"
-                    ) { screen ->
-                        when (screen) {
-                            Screen.DASHBOARD -> DashboardScreen(
-                                viewModel = viewModel,
-                                onNavigateToBotConfig = { currentScreen = Screen.BOT_CONFIG },
-                                onNavigateToPermissions = { currentScreen = Screen.PERMISSIONS },
-                                onNavigateToLogs = { currentScreen = Screen.LOGS }
-                            )
-                            Screen.BOT_CONFIG -> BotConfigScreen(
-                                viewModel = viewModel,
-                                onNavigateBack = { currentScreen = Screen.DASHBOARD }
-                            )
-                            Screen.PERMISSIONS -> PermissionsScreen(
-                                viewModel = viewModel,
-                                onNavigateBack = { currentScreen = Screen.DASHBOARD }
-                            )
-                            Screen.NOTIFICATIONS -> NotificationSettingsScreen(
-                                viewModel = viewModel,
-                                onNavigateBack = { currentScreen = Screen.DASHBOARD }
-                            )
-                            Screen.LOGS -> LogsScreen(
-                                viewModel = viewModel,
-                                onNavigateBack = { currentScreen = Screen.DASHBOARD }
-                            )
+                    ) { innerPadding ->
+                        Crossfade(
+                            targetState = currentScreen,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding),
+                            label = "screen_transition"
+                        ) { screen ->
+                            when (screen) {
+                                Screen.DASHBOARD -> DashboardScreen(
+                                    viewModel = viewModel,
+                                    onNavigateToBotConfig = { currentScreen = Screen.BOT_CONFIG },
+                                    onNavigateToPermissions = { currentScreen = Screen.PERMISSIONS }
+                                )
+                                Screen.BOT_CONFIG -> BotConfigScreen(
+                                    viewModel = viewModel,
+                                    onNavigateBack = { currentScreen = Screen.DASHBOARD }
+                                )
+                                Screen.PERMISSIONS -> PermissionsScreen(
+                                    viewModel = viewModel,
+                                    onNavigateBack = { currentScreen = Screen.DASHBOARD }
+                                )
+                            }
                         }
                     }
                 }

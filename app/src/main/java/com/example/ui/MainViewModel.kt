@@ -400,12 +400,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun saveCredentials(token: String, userId: Long, username: String) {
+    fun saveCredentials(token: String, userId: Long, username: String, deviceId: String = "", relayUrl: String = "") {
         preferenceManager.saveBotCredentials(token, userId, username)
+        if (deviceId.isNotBlank()) {
+            preferenceManager.setDeviceId(deviceId)
+        }
+        preferenceManager.setRelayUrl(relayUrl)
         LogRepository.addLog(
             LogType.SECURITY,
             "Credentials Saved",
-            "Bot credentials securely saved in hardware-backed Android Keystore."
+            "Bot credentials and device ID (${preferenceManager.getDeviceId()}) saved securely."
         )
         runDiagnostics()
     }

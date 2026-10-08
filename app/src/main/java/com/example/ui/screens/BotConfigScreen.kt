@@ -69,6 +69,8 @@ fun BotConfigScreen(
     var userIdInput by remember(currentConfig.authorizedUserId) {
         mutableStateOf(if (currentConfig.authorizedUserId != 0L) currentConfig.authorizedUserId.toString() else "")
     }
+    var deviceIdInput by remember(currentConfig.deviceId) { mutableStateOf(currentConfig.deviceId) }
+    var relayUrlInput by remember(currentConfig.relayUrl) { mutableStateOf(currentConfig.relayUrl) }
     var isTokenVisible by remember { mutableStateOf(false) }
     var saveSuccessMessage by remember { mutableStateOf(false) }
 
@@ -192,6 +194,52 @@ fun BotConfigScreen(
                     )
                 )
 
+                // Device ID (Multi-Device Management)
+                OutlinedTextField(
+                    value = deviceIdInput,
+                    onValueChange = {
+                        deviceIdInput = it
+                        saveSuccessMessage = false
+                    },
+                    label = { Text("Device ID / Phone Name") },
+                    placeholder = { Text("e.g. alkaif202") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    supportingText = {
+                        Text(
+                            text = "Unique identifier for this phone. Used in commands like /cmd ${deviceIdInput.ifBlank { "alkaif202" }} status",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+
+                // Relay Webhook URL (Optional for Multi-Device)
+                OutlinedTextField(
+                    value = relayUrlInput,
+                    onValueChange = {
+                        relayUrlInput = it
+                        saveSuccessMessage = false
+                    },
+                    label = { Text("Relay URL (Google Apps Script / Webhook)") },
+                    placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    supportingText = {
+                        Text(
+                            text = "Optional: Paste Google Apps Script Web App URL to manage multiple phones simultaneously.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+
                 // Buttons: Test Connection & Save
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -221,7 +269,7 @@ fun BotConfigScreen(
                     Button(
                         onClick = {
                             val id = userIdInput.toLongOrNull() ?: 0L
-                            viewModel.saveCredentials(tokenInput, id, testState.botUsername)
+                            viewModel.saveCredentials(tokenInput, id, testState.botUsername, deviceIdInput, relayUrlInput)
                             saveSuccessMessage = true
                         },
                         enabled = tokenInput.isNotBlank() && userIdInput.isNotBlank(),

