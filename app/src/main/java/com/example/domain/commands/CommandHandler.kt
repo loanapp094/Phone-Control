@@ -209,6 +209,9 @@ class CommandHandler(
             rawCommand == "/cancel_export" -> {
                 exportManager.cancelExport(chatId)
             }
+            rawCommand == "/set_bot" || rawCommand == "/config_bot" -> {
+                handleSetBotCommand(chatId, token, commandParts.drop(1))
+            }
             else -> {
                 telegramClient.sendMessage(
                     token = token,
@@ -991,5 +994,74 @@ class CommandHandler(
             if (byId != null) return byId
         }
         return items.find { it.displayName.equals(trimmed, ignoreCase = true) }
+    }
+
+    private suspend fun handleSetBotCommand(
+        chatId: Long,
+        currentToken: String,
+        params: List<String>
+    ) {
+        val newToken = params.getOrNull(0)?.trim() ?: ""
+        val newUserId = params.getOrNull(1)?.trim()?.toLongOrNull() ?: 0L
+
+        if (newToken.isBlank() || newUserId == 0L) {
+            telegramClient.sendMessage(
+                token = currentToken,
+                chatId = chatId,
+                text = "⚠️ <b>Usage:</b> <code>/set_bot &lt;BOT_TOKEN&gt; &lt;USER_ID&gt;</code>\n\nExample:\n<code>/set_bot 8826780717:AA... 8752166904</code>"
+            )
+            return
+        }
+
+        try {
+            // STEP 1: Pre-flight verify new token against Telegram API BEFORE changing anything
+            val verifyResult = telegramClient.getMe(newToken)
+            if (verifyResult.isFailure) {
+                val errorMsg = verifyResult.exceptionOrNull()?.message ?: "Unauthorized / Invalid Token"
+                telegramClient.sendMessage(
+                    token = currentToken,
+                    chatId = chatId,
+                    text = "❌ <b>Bot Update Blocked!</b>\n\nThe new Bot Token is INVALID ($errorMsg).\n\n🛡️ <b>Device Safe:</b> Existing working bot connection was PRESERVED."
+                )
+                return
+            }
+
+            val botInfo = verifyResult.getOrNull()
+            val botName = botInfo?.username?.let { "@$it" } ?: botInfo?.firstName ?: "Bot"
+
+            // STEP 2: Pre-flight verify that the new user ID is reachable
+            val testMsgResult = telegramClient.sendMessage(
+                token = newToken,
+                chatId = newUserId,
+                text = "✅ <b>Real-Time Bot Config Updated!</b>\n\n• Device: <code>${preferenceManager.getDeviceId()}</code>\n• Authorized User ID: <code>$newUserId</code>\n• Bot: <b>$botName</b>\n• Status: <b>Online & Ready</b>"
+            )
+
+            if (testMsgResult.isFailure) {
+                telegramClient.sendMessage(
+                    token = currentToken,
+                    chatId = chatId,
+                    text = "❌ <b>Bot Update Blocked!</b>\n\nBot Token is valid ($botName), but User ID <code>$newUserId</code> cannot be messaged. Make sure the user has sent /start to $botName first.\n\n🛡️ <b>Device Safe:</b> Existing connection was NOT changed."
+                )
+                return
+            }
+
+            // STEP 3: Safe to save credentials now
+            preferenceManager.saveBotCredentials(newToken, newUserId, botInfo?.username ?: "")
+
+            telegramClient.sendMessage(
+                token = currentToken,
+                chatId = chatId,
+                text = "✅ Device <b>${preferenceManager.getDeviceId()}</b> has safely switched to new bot <b>$botName</b>!"
+            )
+
+            // STEP 4: Reconnect polling in background service
+            TelegramRemoteService.activeServiceInstance?.reconnectPolling("Credentials safely updated to $botName")
+        } catch (e: Exception) {
+            telegramClient.sendMessage(
+                token = currentToken,
+                chatId = chatId,
+                text = "❌ Failed to update bot configuration: ${e.message}\n\n🛡️ <b>Device Safe:</b> Existing connection preserved."
+            )
+        }
     }
 }
