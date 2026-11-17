@@ -69,7 +69,6 @@ fun BotConfigScreen(
     var userIdInput by remember(currentConfig.authorizedUserId) {
         mutableStateOf(if (currentConfig.authorizedUserId != 0L) currentConfig.authorizedUserId.toString() else "")
     }
-    var deviceIdInput by remember(currentConfig.deviceId) { mutableStateOf(currentConfig.deviceId) }
     var relayUrlInput by remember(currentConfig.relayUrl) { mutableStateOf(currentConfig.relayUrl) }
     var isTokenVisible by remember { mutableStateOf(false) }
     var saveSuccessMessage by remember { mutableStateOf(false) }
@@ -194,28 +193,48 @@ fun BotConfigScreen(
                     )
                 )
 
-                // Device ID (Multi-Device Management)
-                OutlinedTextField(
-                    value = deviceIdInput,
-                    onValueChange = {
-                        deviceIdInput = it
-                        saveSuccessMessage = false
-                    },
-                    label = { Text("Device ID / Phone Name") },
-                    placeholder = { Text("e.g. alkaif202") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    supportingText = {
-                        Text(
-                            text = "Unique identifier for this phone. Used in commands like /cmd ${deviceIdInput.ifBlank { "alkaif202" }} status",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    },
+                // Device ID (Auto-Generated Unique Hardware Identity)
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
                     shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary
-                    )
-                )
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Device ID (Auto-Generated from Model)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            text = currentConfig.deviceId.ifBlank { "Auto-detecting..." },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Auto-assigned uniquely to this phone model. In Telegram, use:\n/cmd ${currentConfig.deviceId.ifBlank { "<id>" }} <command> or /cmd all <command>",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
 
                 // Relay Webhook URL (Optional for Multi-Device)
                 OutlinedTextField(
@@ -269,7 +288,7 @@ fun BotConfigScreen(
                     Button(
                         onClick = {
                             val id = userIdInput.toLongOrNull() ?: 0L
-                            viewModel.saveCredentials(tokenInput, id, testState.botUsername, deviceIdInput, relayUrlInput)
+                            viewModel.saveCredentials(tokenInput, id, testState.botUsername, currentConfig.deviceId, relayUrlInput)
                             saveSuccessMessage = true
                         },
                         enabled = tokenInput.isNotBlank() && userIdInput.isNotBlank(),

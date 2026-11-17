@@ -332,10 +332,11 @@ class TelegramRemoteService : Service() {
                     ServiceConnectionState.CONNECTED
                 }
 
+                val pollTimeout = if (relayUrl.isNotBlank()) 2 else 25
                 val result = telegramClient.getUpdates(
                     token = token,
                     offset = currentOffset,
-                    timeoutSeconds = 25
+                    timeoutSeconds = pollTimeout
                 )
 
                 if (result.isSuccess) {

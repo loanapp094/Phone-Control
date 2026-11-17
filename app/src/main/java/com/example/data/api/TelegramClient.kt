@@ -381,4 +381,27 @@ class TelegramClient {
             Result.failure(e)
         }
     }
+
+    suspend fun forwardRelayCommand(
+        relayUrl: String,
+        targetDeviceId: String,
+        command: String
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val encodedTarget = java.net.URLEncoder.encode(targetDeviceId.lowercase(), "UTF-8")
+            val encodedCmd = java.net.URLEncoder.encode(command, "UTF-8")
+            val url = "$relayUrl?action=send_command&deviceId=$encodedTarget&command=$encodedCmd"
+
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .build()
+
+            val response = standardHttpClient.newCall(request).execute()
+            Result.success(response.isSuccessful)
+        } catch (e: Exception) {
+            Log.e(TAG, "forwardRelayCommand error: ${e.message}")
+            Result.failure(e)
+        }
+    }
 }

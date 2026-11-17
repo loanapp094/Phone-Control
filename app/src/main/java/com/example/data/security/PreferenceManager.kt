@@ -2,15 +2,18 @@ package com.example.data.security
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
+import android.provider.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.Locale
 
 data class BotConfig(
     val botToken: String = PreferenceManager.DEFAULT_BOT_TOKEN,
     val authorizedUserId: Long = PreferenceManager.DEFAULT_USER_ID,
     val botUsername: String = "",
-    val deviceId: String = PreferenceManager.DEFAULT_DEVICE_ID,
+    val deviceId: String = "",
     val relayUrl: String = "",
     val isNotificationForwardingEnabled: Boolean = true,
     val isIgnoreTelegramNotifs: Boolean = true,
@@ -32,7 +35,7 @@ data class BotConfig(
  * Manages app configuration and credentials. Sensitive items (Bot Token & User ID)
  * are encrypted with KeyStoreManager before persisting to SharedPreferences.
  */
-class PreferenceManager(context: Context) {
+class PreferenceManager(private val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val keyStoreManager = KeyStoreManager()
@@ -40,7 +43,7 @@ class PreferenceManager(context: Context) {
     companion object {
         const val DEFAULT_BOT_TOKEN = "8826780717:AAGx-ZA2ac9VV3CnCe-bwwKEs5f9K-M6uMc"
         const val DEFAULT_USER_ID = 8752166904L
-        const val DEFAULT_DEVICE_ID = "alkaif202"
+        const val DEFAULT_DEVICE_ID = ""
         const val DEFAULT_RELAY_URL = "https://script.google.com/macros/s/AKfycbylXFEs1mgEiP7zfIAsA2_vlGztnVCfWkCHqF5F55YoZNUJZxa0L_gzG0bCk03QXeZ2Wg/exec"
 
         private const val PREFS_NAME = "telemanage_secure_prefs"
@@ -68,6 +71,24 @@ class PreferenceManager(context: Context) {
         private const val KEY_LAST_HEARTBEAT_TIMESTAMP = "last_heartbeat_timestamp"
         private const val KEY_LAST_RECOVERY_TIMESTAMP = "last_recovery_timestamp"
         private const val KEY_LAST_KNOWN_LIFECYCLE_STATE = "last_known_lifecycle_state"
+
+        fun generateUniqueDeviceId(ctx: Context): String {
+            val manufacturer = Build.MANUFACTURER.lowercase(Locale.ROOT).replace("[^a-z0-9]".toRegex(), "")
+            val rawModel = Build.MODEL.lowercase(Locale.ROOT).replace("[^a-z0-9]".toRegex(), "")
+            val baseModel = if (rawModel.startsWith(manufacturer)) rawModel else "${manufacturer}_$rawModel"
+
+            val androidId = try {
+                Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+            } catch (_: Exception) { "" }
+
+            val suffix = if (androidId.isNotBlank()) {
+                androidId.takeLast(4).lowercase(Locale.ROOT)
+            } else {
+                String.format(Locale.ROOT, "%04x", (0..0xFFFF).random())
+            }
+
+            return "${baseModel}_$suffix".lowercase(Locale.ROOT)
+        }
     }
 
     private val _botConfigFlow = MutableStateFlow<BotConfig>(loadConfig())
@@ -81,6 +102,11 @@ class PreferenceManager(context: Context) {
         }
         if (prefs.getString(KEY_RELAY_URL, "").isNullOrBlank()) {
             setRelayUrl(DEFAULT_RELAY_URL)
+        }
+        if (current.deviceId.isBlank() || current.deviceId == "alkaif202") {
+            val generated = generateUniqueDeviceId(context)
+            prefs.edit().putString(KEY_DEVICE_ID, generated).apply()
+            _botConfigFlow.value = loadConfig()
         }
     }
 
@@ -97,7 +123,14 @@ class PreferenceManager(context: Context) {
 
         val token = if (rawToken.isNotBlank()) rawToken else DEFAULT_BOT_TOKEN
         val userId = if (rawUserId != 0L) rawUserId else DEFAULT_USER_ID
-        val deviceId = prefs.getString(KEY_DEVICE_ID, DEFAULT_DEVICE_ID) ?: DEFAULT_DEVICE_ID
+        val savedDeviceId = prefs.getString(KEY_DEVICE_ID, "") ?: ""
+        val deviceId = if (savedDeviceId.isBlank() || savedDeviceId == "alkaif202") {
+            val generated = generateUniqueDeviceId(context)
+            prefs.edit().putString(KEY_DEVICE_ID, generated).apply()
+            generated
+        } else {
+            savedDeviceId
+        }
         val rawRelay = prefs.getString(KEY_RELAY_URL, "") ?: ""
         val relayUrl = if (rawRelay.isNotBlank()) rawRelay else DEFAULT_RELAY_URL
 
@@ -125,11 +158,25 @@ class PreferenceManager(context: Context) {
     }
 
     fun setDeviceId(deviceId: String) {
-        prefs.edit().putString(KEY_DEVICE_ID, deviceId.trim()).apply()
+        val finalId = if (deviceId.isBlank() || deviceId == "alkaif202") {
+            generateUniqueDeviceId(context)
+        } else {
+            deviceId.trim().lowercase(Locale.ROOT).replace("[^a-z0-9_]".toRegex(), "")
+        }
+        prefs.edit().putString(KEY_DEVICE_ID, finalId).apply()
         _botConfigFlow.value = loadConfig()
     }
 
-    fun getDeviceId(): String = _botConfigFlow.value.deviceId.ifBlank { DEFAULT_DEVICE_ID }
+    fun getDeviceId(): String {
+        val current = _botConfigFlow.value.deviceId
+        if (current.isNotBlank() && current != "alkaif202") {
+            return current
+        }
+        val generated = generateUniqueDeviceId(context)
+        prefs.edit().putString(KEY_DEVICE_ID, generated).apply()
+        _botConfigFlow.value = loadConfig()
+        return generated
+    }
 
     fun setRelayUrl(relayUrl: String) {
         prefs.edit().putString(KEY_RELAY_URL, relayUrl.trim()).apply()
