@@ -400,6 +400,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun saveServerConfiguration(serverUrl: String, deviceId: String) {
+        preferenceManager.setServerUrl(serverUrl)
+        if (deviceId.isNotBlank()) {
+            preferenceManager.setDeviceId(deviceId)
+        }
+        LogRepository.addLog(
+            LogType.SYSTEM,
+            "Server Config Saved",
+            "Server URL: $serverUrl, Device ID: ${preferenceManager.getDeviceId()}"
+        )
+        runDiagnostics()
+    }
+
     fun saveCredentials(token: String, userId: Long, username: String, deviceId: String = "", relayUrl: String = "") {
         preferenceManager.saveBotCredentials(token, userId, username)
         if (deviceId.isNotBlank()) {
@@ -414,26 +427,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runDiagnostics()
     }
 
-    fun testBotConnection(token: String) {
+    fun testBotConnection(token: String = "") {
+        testServerConnection(preferenceManager.getServerUrl(), preferenceManager.getDeviceId())
+    }
+
+    fun testServerConnection(serverUrl: String, deviceId: String) {
         viewModelScope.launch {
             _botTestState.value = BotTestState(isLoading = true)
-            val result = telegramClient.getMe(token.trim())
+            val cleanUrl = serverUrl.trim().ifBlank { "http://localhost:5000" }
+            val cleanDevice = deviceId.trim().ifBlank { preferenceManager.getDeviceId() }
+            val result = telegramClient.pollBackendServer(cleanUrl, cleanDevice, 100, android.os.Build.MODEL)
             if (result.isSuccess) {
-                val user = result.getOrNull()
-                val username = user?.username ?: ""
                 _botTestState.value = BotTestState(
                     isLoading = false,
                     isSuccess = true,
-                    message = "Connected! Bot: @$username (${user?.firstName})",
-                    botUsername = username
+                    message = "Connected! NBFC Backend server is reachable at $cleanUrl",
+                    botUsername = cleanDevice
                 )
                 LogRepository.addLog(
                     LogType.SYSTEM,
-                    "Bot Verified",
-                    "Successfully reached Telegram Bot @$username"
+                    "Server Verified",
+                    "Successfully reached NBFC Fleet Server at $cleanUrl"
                 )
             } else {
-                val errorMsg = result.exceptionOrNull()?.message ?: "Failed to connect to Telegram API"
+                val errorMsg = result.exceptionOrNull()?.message ?: "Failed to connect to Fleet Server"
                 _botTestState.value = BotTestState(
                     isLoading = false,
                     isSuccess = false,
@@ -441,7 +458,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 LogRepository.addLog(
                     LogType.ERROR,
-                    "Bot Verification Failed",
+                    "Server Verification Failed",
                     errorMsg,
                     isSuccess = false
                 )
@@ -450,47 +467,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendTestPing() {
-        val token = preferenceManager.getBotToken()
-        val userId = preferenceManager.getAuthorizedUserId()
-
-        if (token.isBlank() || userId == 0L) {
-            _testPingState.value = TestPingState(
-                isSuccess = false,
-                message = "Please save Bot Token and Authorized User ID first."
-            )
-            return
-        }
+        val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
+        val deviceId = preferenceManager.getDeviceId()
 
         viewModelScope.launch {
             _testPingState.value = TestPingState(isLoading = true)
-            val statusMsg = deviceInfoProvider.generateStatusTelegramMessage(
-                isServiceRunning = isServiceRunning.value,
-                serviceStartTimeMs = serviceStartTimeMs.value
+            val result = telegramClient.reportToBackend(
+                serverUrl = serverUrl,
+                deviceId = deviceId,
+                type = "TEXT",
+                text = "🚀 <b>Fleet Ping Test</b>\n\nDevice $deviceId successfully communicated with the NBFC Dashboard!"
             )
-
-            val text = """
-                🚀 <b>TeleManage Ping Test</b>
-
-                This is a test notification from your Android device!
-                Remote connection is working seamlessly.
-
-                $statusMsg
-            """.trimIndent()
-
-            val result = telegramClient.sendMessage(token, userId, text)
             if (result.isSuccess) {
                 _testPingState.value = TestPingState(
                     isLoading = false,
                     isSuccess = true,
-                    message = "Ping message successfully delivered to Telegram!"
+                    message = "Ping message successfully delivered to Dashboard!"
                 )
                 LogRepository.addLog(
                     LogType.COMMAND,
                     "Test Ping Sent",
-                    "Sent test message and device status to chat $userId"
+                    "Sent test message and device status to Dashboard ($serverUrl)"
                 )
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Failed to send message"
+                val err = result.exceptionOrNull()?.message ?: "Failed to send ping"
                 _testPingState.value = TestPingState(
                     isLoading = false,
                     isSuccess = false,

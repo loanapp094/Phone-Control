@@ -204,26 +204,99 @@ class MediaRepository(private val context: Context) {
         return String.format(Locale.getDefault(), "%02d:%02d", min, sec)
     }
 
-    suspend fun generatePhotosTelegramMessage(): String {
+    suspend fun getRecentPhotosPaged(page: Int = 1, pageSize: Int = 12): Pair<List<MediaItem>, Int> = withContext(Dispatchers.IO) {
+        if (!hasMediaPermission()) return@withContext Pair(emptyList(), 0)
+
+        val photos = mutableListOf<MediaItem>()
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.MIME_TYPE
+        )
+        val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+        var totalCount = 0
+
+        try {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                sortOrder
+            )?.use { cursor ->
+                totalCount = cursor.count
+                if (totalCount > 0) {
+                    val totalPages = ((totalCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+                    val validPage = page.coerceIn(1, totalPages)
+                    val startIndex = (validPage - 1) * pageSize
+
+                    if (cursor.moveToPosition(startIndex)) {
+                        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                        val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                        val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                        val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                        val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+
+                        do {
+                            val id = cursor.getLong(idColumn)
+                            val name = cursor.getString(nameColumn) ?: "photo_$id.jpg"
+                            val size = cursor.getLong(sizeColumn)
+                            val dateAdded = cursor.getLong(dateColumn)
+                            val mime = cursor.getString(mimeColumn) ?: "image/jpeg"
+
+                            val contentUri = ContentUris.withAppendedId(
+                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                id
+                            )
+
+                            photos.add(
+                                MediaItem(
+                                    id = id,
+                                    uri = contentUri,
+                                    displayName = name,
+                                    sizeBytes = size,
+                                    dateAddedEpochSeconds = dateAdded,
+                                    isVideo = false,
+                                    mimeType = mime
+                                )
+                            )
+                        } while (cursor.moveToNext() && photos.size < pageSize)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        Pair(photos, totalCount)
+    }
+
+    suspend fun generatePhotosTelegramMessage(page: Int = 1, pageSize: Int = 12): String {
         if (!hasMediaPermission()) {
             return "⚠️ <b>Media Permission Missing</b>\nPlease open the TeleManage app on your phone and grant Media Access."
         }
-        val photos = getRecentPhotos(8)
+        val (photos, totalCount) = getRecentPhotosPaged(page, pageSize)
         if (photos.isEmpty()) {
             return "📷 <b>No Recent Photos Found</b>\nMediaStore returned 0 photos in internal/external storage."
         }
 
+        val totalPages = ((totalCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+        val validPage = page.coerceIn(1, totalPages)
+        val startIndex = (validPage - 1) * pageSize
+
         val sb = StringBuilder()
         sb.append("📸 <b>Recent Photos on Device</b>\n\n")
         photos.forEachIndexed { index, photo ->
-            val num = index + 1
+            val num = startIndex + index + 1
             val size = formatBytes(photo.sizeBytes)
             val date = formatDate(photo.dateAddedEpochSeconds)
             sb.append("<b>$num.</b> <code>${photo.displayName}</code>\n")
             sb.append("   • ID: <code>${photo.id}</code> | Size: $size | $date\n")
             sb.append("   • Download: /photo_${photo.id} or <code>/photo $num</code>\n\n")
         }
-        sb.append("💡 <i>Tip: Send <code>/photo &lt;number or ID&gt;</code> to download.</i>")
+        sb.append("<i>Page $validPage/$totalPages ($totalCount photos on phone)</i>\n")
+        sb.append("💡 <i>Tip: Send <code>/photo &lt;number or ID&gt;</code> to download. Next page: <code>/photos ${validPage + 1}</code></i>")
         return sb.toString()
     }
 

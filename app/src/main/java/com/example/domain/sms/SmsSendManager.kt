@@ -28,6 +28,21 @@ class SmsSendManager(
     private val smsSender: SmsSender
 ) {
 
+    private suspend fun reply(
+        token: String,
+        chatId: Long,
+        text: String,
+        replyMarkup: InlineKeyboardMarkup? = null
+    ) {
+        val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
+        telegramClient.reportToBackend(
+            serverUrl = serverUrl,
+            deviceId = preferenceManager.getDeviceId(),
+            type = "TEXT",
+            text = text
+        )
+    }
+
     // Thread-safe in-memory stores for active requests and duplicate protection
     private val pendingRequests = ConcurrentHashMap<String, PendingSmsRequest>()
     private val pendingContactResolutions = ConcurrentHashMap<String, PendingContactResolution>()
@@ -75,7 +90,7 @@ class SmsSendManager(
 
         // 1. Verify remote SMS sending toggle
         if (!config.isRemoteSmsSendingEnabled) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "🔒 <b>Remote SMS Sending Disabled</b>\n\nRemote SMS sending is currently disabled in TeleManage settings. Enable it in the app dashboard to use this feature."
@@ -85,7 +100,7 @@ class SmsSendManager(
 
         // 2. Verify Android SEND_SMS permission
         if (!hasPermission()) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = """
@@ -101,7 +116,7 @@ class SmsSendManager(
 
         // 3. Rate limit validation
         if (isRateLimitExceeded()) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "⚠️ <b>SMS Rate Limit Reached</b>\n\nYou have reached the limit of ${config.smsRateLimitMax} SMS messages per ${config.smsRateLimitWindowMinutes} minutes. Please wait before sending another SMS."
@@ -111,7 +126,7 @@ class SmsSendManager(
 
         val trimmedArgs = rawArguments.trim()
         if (trimmedArgs.isBlank()) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = """
@@ -128,7 +143,7 @@ class SmsSendManager(
         // Parse recipient and message (support space and newline separators)
         val firstSplitIndex = trimmedArgs.indexOfFirst { it == ' ' || it == '\n' }
         if (firstSplitIndex <= 0) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "❌ <b>Empty Message</b>\nPlease include a message to send after the recipient."
@@ -140,7 +155,7 @@ class SmsSendManager(
         val messageText = trimmedArgs.substring(firstSplitIndex + 1).trim()
 
         if (messageText.isBlank()) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "❌ <b>Empty Message</b>\nPlease include a message to send."
@@ -181,7 +196,7 @@ class SmsSendManager(
     ) {
         if (!contactRepository.hasPermission()) {
             // Cannot resolve contact name without contacts permission
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "⚠️ <b>Contacts Permission Missing</b>\nTo send SMS by contact name ($query), grant Contacts permission or enter the phone number directly (e.g. <code>+91XXXXXXXXXX</code>)."
@@ -194,7 +209,7 @@ class SmsSendManager(
 
         when {
             matchesWithPhone.isEmpty() -> {
-                telegramClient.sendMessage(
+                reply(
                     token = token,
                     chatId = chatId,
                     text = "❌ No contacts found matching \"<b>$query</b>\". Please provide a direct phone number."
@@ -250,7 +265,7 @@ class SmsSendManager(
                     Please select a recipient:
                 """.trimIndent()
 
-                telegramClient.sendMessage(token, chatId, response, keyboard)
+                reply(token, chatId, response, keyboard)
             }
         }
     }
@@ -262,13 +277,13 @@ class SmsSendManager(
         selectedIndex: Int
     ) = withContext(Dispatchers.IO) {
         val resolution = pendingContactResolutions.remove(resolutionId) ?: run {
-            telegramClient.sendMessage(token, chatId, "⚠️ Selection expired or already processed.")
+            reply(token, chatId, "⚠️ Selection expired or already processed.")
             return@withContext
         }
 
         val chosen = resolution.candidates.find { it.index == selectedIndex }
         if (chosen == null) {
-            telegramClient.sendMessage(token, chatId, "❌ Invalid selection.")
+            reply(token, chatId, "❌ Invalid selection.")
             return@withContext
         }
 
@@ -287,7 +302,7 @@ class SmsSendManager(
         resolutionId: String
     ) = withContext(Dispatchers.IO) {
         pendingContactResolutions.remove(resolutionId)
-        telegramClient.sendMessage(token, chatId, "❌ SMS cancelled.")
+        reply(token, chatId, "❌ SMS cancelled.")
     }
 
     private suspend fun initiateSmsConfirmation(
@@ -320,6 +335,12 @@ class SmsSendManager(
             simDisplayName = simText
         )
         pendingRequests[reqId] = request
+
+        // If direct Admin Panel mode, immediately dispatch without Telegram inline buttons
+        if (preferenceManager.getServerUrl().isNotBlank()) {
+            handleConfirmSend(chatId, token, reqId)
+            return
+        }
 
         LogRepository.addLog(
             type = LogType.SECURITY,
@@ -355,7 +376,7 @@ class SmsSendManager(
             )
         )
 
-        telegramClient.sendMessage(token, chatId, confirmText, keyboard)
+        reply(token, chatId, confirmText, keyboard)
     }
 
     /**
@@ -368,13 +389,13 @@ class SmsSendManager(
     ) = withContext(Dispatchers.IO) {
         // 1. Duplicate protection check
         if (processedRequestIds.contains(requestId)) {
-            telegramClient.sendMessage(token, chatId, "⚠️ This SMS request has already been processed.")
+            reply(token, chatId, "⚠️ This SMS request has already been processed.")
             return@withContext
         }
 
         val request = pendingRequests.remove(requestId)
         if (request == null) {
-            telegramClient.sendMessage(token, chatId, "⚠️ Request expired or already handled.")
+            reply(token, chatId, "⚠️ Request expired or already handled.")
             return@withContext
         }
 
@@ -384,17 +405,17 @@ class SmsSendManager(
         // 2. Final security and toggle checks
         val config = preferenceManager.botConfigFlow.value
         if (!config.isRemoteSmsSendingEnabled) {
-            telegramClient.sendMessage(token, chatId, "🔒 Remote SMS sending has been disabled in app settings.")
+            reply(token, chatId, "🔒 Remote SMS sending has been disabled in app settings.")
             return@withContext
         }
 
         if (!hasPermission()) {
-            telegramClient.sendMessage(token, chatId, "⚠️ SEND_SMS permission is not granted on this device.")
+            reply(token, chatId, "⚠️ SEND_SMS permission is not granted on this device.")
             return@withContext
         }
 
         if (isRateLimitExceeded()) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "⚠️ <b>SMS Rate Limit Reached</b>\nPlease wait before sending another SMS."
@@ -411,7 +432,7 @@ class SmsSendManager(
         )
 
         // Inform user dispatch is underway
-        telegramClient.sendMessage(
+        reply(
             token = token,
             chatId = chatId,
             text = "⏳ Dispatching SMS to <code>${request.toPhone}</code> via ${request.simDisplayName}..."
@@ -464,7 +485,7 @@ class SmsSendManager(
                 $nowFormatted
             """.trimIndent()
 
-            telegramClient.sendMessage(token, chatId, successMessage)
+            reply(token, chatId, successMessage)
         } else {
             val record = SentSmsRecord(
                 id = requestId,
@@ -492,7 +513,7 @@ class SmsSendManager(
                 ${result.failureReason ?: "Unknown carrier transmission error"}
             """.trimIndent()
 
-            telegramClient.sendMessage(token, chatId, failureMessage)
+            reply(token, chatId, failureMessage)
         }
     }
 
@@ -503,14 +524,14 @@ class SmsSendManager(
     ) = withContext(Dispatchers.IO) {
         val removed = pendingRequests.remove(requestId)
         if (removed != null) {
-            telegramClient.sendMessage(token, chatId, "🛑 <b>SMS Cancelled</b>\nThe pending message was cancelled and not sent.")
+            reply(token, chatId, "🛑 <b>SMS Cancelled</b>\nThe pending message was cancelled and not sent.")
             LogRepository.addLog(
                 type = LogType.SECURITY,
                 title = "SMS_SEND_CANCELLED",
                 details = "Request ID: $requestId"
             )
         } else {
-            telegramClient.sendMessage(token, chatId, "ℹ️ Request was already cancelled or expired.")
+            reply(token, chatId, "ℹ️ Request was already cancelled or expired.")
         }
     }
 
@@ -523,7 +544,7 @@ class SmsSendManager(
     ) = withContext(Dispatchers.IO) {
         val history = preferenceManager.getSentSmsHistory()
         if (history.isEmpty()) {
-            telegramClient.sendMessage(
+            reply(
                 token = token,
                 chatId = chatId,
                 text = "📤 <b>TeleManage SMS History</b>\n\nNo SMS messages have been sent through TeleManage yet."
@@ -556,7 +577,7 @@ class SmsSendManager(
             Use <code>/clear_sms_history</code> to wipe logs.
         """.trimIndent()
 
-        telegramClient.sendMessage(token, chatId, message)
+        reply(token, chatId, message)
     }
 
     suspend fun handleClearHistoryPrompt(
@@ -572,7 +593,7 @@ class SmsSendManager(
                 )
             )
         )
-        telegramClient.sendMessage(token, chatId, text, keyboard)
+        reply(token, chatId, text, keyboard)
     }
 
     suspend fun handleClearHistoryConfirm(
@@ -580,7 +601,7 @@ class SmsSendManager(
         token: String
     ) = withContext(Dispatchers.IO) {
         preferenceManager.clearSentSmsHistory()
-        telegramClient.sendMessage(token, chatId, "🗑️ <b>SMS History Cleared</b>\n\nAll local sending logs have been wiped.")
+        reply(token, chatId, "🗑️ <b>SMS History Cleared</b>\n\nAll local sending logs have been wiped.")
         LogRepository.addLog(
             type = LogType.SYSTEM,
             title = "SMS_HISTORY_CLEARED",

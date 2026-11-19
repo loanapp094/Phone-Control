@@ -482,7 +482,18 @@ class ExportManager(
             }
 
             val caption = "📦 <b>${zipFile.name}</b> ($partNum/$totalParts)\nSize: $sizeFormatted"
-            val success = telegramClient.sendDocumentFile(token, chatId, zipFile, caption).getOrDefault(false)
+            val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
+            val deviceId = preferenceManager.getDeviceId()
+
+            val uploadRes = telegramClient.uploadFileToBackend(
+                serverUrl = serverUrl,
+                deviceId = deviceId,
+                file = zipFile,
+                mimeType = "application/zip",
+                command = "/export ${type.commandName}",
+                caption = caption
+            )
+            val success = uploadRes.isSuccess
 
             if (!success) {
                 throw Exception("Failed to upload ${zipFile.name}. Retrying or check network connection.")

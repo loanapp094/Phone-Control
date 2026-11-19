@@ -42,11 +42,12 @@ import com.example.ui.screens.BotConfigScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.PermissionsScreen
 import com.example.ui.screens.VilServicesScreen
+import androidx.compose.material.icons.filled.CloudDone
 import com.example.ui.theme.TeleManageTheme
 
 enum class Screen(val title: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Default.Dashboard),
-    BOT_CONFIG("Telegram Bot", Icons.Default.Key),
+    BOT_CONFIG("Server Config", Icons.Default.CloudDone),
     PERMISSIONS("Permissions", Icons.Default.Security)
 }
 
@@ -84,7 +85,7 @@ class MainActivity : ComponentActivity() {
                             TopAppBar(
                                 title = {
                                     Text(
-                                        text = if (currentScreen == Screen.DASHBOARD) "TeleManage Remote" else currentScreen.title,
+                                        text = if (currentScreen == Screen.DASHBOARD) "Device Fleet Remote" else currentScreen.title,
                                         fontWeight = FontWeight.Bold
                                     )
                                 },

